@@ -736,7 +736,7 @@ export function createEngine(opts: EngineOptions): MockEngine {
     if (!member) throw new DataError('팀원을 찾을 수 없어요', 'not_found')
     if (!isObj(patch)) throw new DataError('수정할 내용이 올바르지 않아요')
 
-    if (patch.presence !== undefined) touch('member', id)
+    touch('member', id) // any manager patch counts, not only presence (same rule as the server)
     const next: Partial<Member> = {}
     if (patch.name !== undefined) next.name = checkName(patch.name)
     if (patch.role !== undefined) next.role = checkRole(patch.role)

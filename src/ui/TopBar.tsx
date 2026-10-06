@@ -10,7 +10,7 @@ import { cssVars } from './format'
 import { useProjectList } from './hooks'
 import { Icon } from './icons'
 import { useUi } from './uiState'
-import { Toasts } from './Toasts'
+import { ConnectionBanner, Toasts } from './Toasts'
 import { Suggestions } from './Suggestions'
 
 const OVERLAYS: { id: Overlay; label: string; key: string }[] = [
@@ -255,6 +255,7 @@ export function TopBar() {
     useShallow((s) => ({ sourceLabel: s.sourceLabel, canDemo: s.canDemo, demoMode: s.demoMode })),
   )
   const status = useOffice((s) => s.status)
+  const connection = useOffice((s) => s.connection)
   return (
     <div className="hud-top">
       <div className="top-head">
@@ -264,6 +265,7 @@ export function TopBar() {
             <Icon name="cube" size={14} />
           </span>
           <span className="brand-name">팀 오피스</span>
+          {connection !== null && <span className="badge-server">서버</span>}
         </div>
         <KpiRow />
         <span className="grow" />
@@ -287,6 +289,7 @@ export function TopBar() {
           데이터를 불러오지 못했어요
         </div>
       )}
+      <ConnectionBanner />
       <Toasts />
       </div>
       <Suggestions />

@@ -63,6 +63,7 @@ export function Hud() {
   useHotkeys()
   useTrackPointer()
   const status = useOffice((s) => s.status)
+  const offline = useOffice((s) => s.connection === 'offline')
   const dragging = useOffice((s) => s.drag !== null)
   const hasDetail = useOffice((s) => {
     if (!s.selection) return false
@@ -80,7 +81,7 @@ export function Hud() {
       <Rail />
       <Dialogs />
       <DragGhost />
-      {(status === 'loading' || status === 'idle') && (
+      {(status === 'loading' || status === 'idle') && !offline && (
         <div className="loader" role="status">
           <span className="spinner" />
           <span>사무실을 여는 중…</span>

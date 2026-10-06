@@ -194,7 +194,8 @@ function TaskDialog({ taskId, defaults }: { taskId?: Id; defaults?: Partial<Task
       status: form.status,
       priority: form.priority,
       estimate: form.estimate,
-      assigneeId: form.assigneeId || null,
+      // A member removed while the dialog was open (e.g. by a snapshot) must not be sent as assignee.
+      assigneeId: form.assigneeId && members.some((m) => m.id === form.assigneeId) ? form.assigneeId : null,
       dueDate: form.dueDate || null,
     }
     const created = await st.createTask(input)

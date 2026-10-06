@@ -38,9 +38,9 @@ store.ts (zustand `useOffice`)  — entities by id + view state + actions
 
 ## Contract files (architect-owned — import, don't edit)
 
-`docs/PLAN.md`, `src/data/types.ts`, `src/data/DataSource.ts`, `src/data/meta.ts`,
+`docs/PLAN.md`, `docs/API.md`, `src/data/types.ts`, `src/data/DataSource.ts`, `src/data/meta.ts`,
 `src/data/selectors.ts`, `src/data/insights.ts`, `src/office/layout.ts`, `src/theme.ts`, `src/store.ts`, `src/App.tsx`,
-`src/main.tsx`, `src/index.css`.
+`src/main.tsx`, `src/index.css`, `vite.config.ts`.
 Need a change? Stop and describe exactly what and why in your report instead of editing.
 
 ## File ownership
@@ -48,6 +48,8 @@ Need a change? Stop and describe exactly what and why in your report instead of 
 | Area | Owner | Files |
 |---|---|---|
 | Mock data + demo mode | data-engineer | `src/data/mock/**` (entry: `createMockDataSource()` in `index.ts`) |
+| API client + contract tests | data-engineer | `src/data/api/**` (entry: `createApiDataSource()`), `tests/contract/**` |
+| Local API server + demo bot | backend-engineer | `server/**` (contract: `docs/API.md`) |
 | 3D office | scene-builder | `src/scene/**` (entry: `OfficeScene`) |
 | Panels, forms, HUD | ui-builder | `src/ui/**` (entry: `Hud`, styles in `src/ui/*.css`) |
 

@@ -3,12 +3,13 @@ import { Canvas } from '@react-three/fiber'
 import { useEffect } from 'react'
 import { useOffice } from './store'
 import { createMockDataSource } from './data/mock'
+import { createApiDataSource } from './data/api'
 import { OfficeScene } from './scene/OfficeScene'
 import { Hud } from './ui/Hud'
 
 // One source per page load (module scope, so StrictMode's double effects don't create two).
-// Swap this line for an API-backed DataSource later.
-const dataSource = createMockDataSource()
+// `?source=api` talks to the local server (docs/API.md); otherwise the in-browser mock.
+const dataSource = new URLSearchParams(location.search).get('source') === 'api' ? createApiDataSource() : createMockDataSource()
 
 export default function App() {
   useEffect(() => {

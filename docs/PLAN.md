@@ -43,6 +43,21 @@
   한 번 클릭으로 실행, 3D에서 상자가 날아감. 닫으면 다시 안 보임.
 - 판정 로직은 `src/data/insights.ts` (memberSignal / memberVitals / suggestActions)에 공유.
 
+## 로드맵 (2026-10-06 합의): C → A → D
+- **C. 로컬 백엔드 연결** — 화면 코드 수정 없이 `ApiDataSource`로 교체되는지 증명. 계약: `docs/API.md`.
+  - 스택: Hono + Node 내장 SQLite(`node:sqlite`), 실시간 변경은 SSE.
+  - 데모 모드: API만 쓰는 **봇 클라이언트**로 분리(서버 프로세스가 호스팅, 모든 탭이 같은 사무실).
+  - 서버 연결 실패: "서버에 연결할 수 없어요" 배너 + 자동 재연결.
+  - `?source=api`로 전환, 기본은 지금의 가짜 데이터.
+  - 같은 계약 테스트를 Mock/API 양쪽에 돌려 교체 가능성 검증.
+  - 범위 밖: 로그인/권한, 배포.
+- **A. 관리 기능 심화** — 회의실을 기능으로(안건 올리기, 회의 시작 시 실제 이동), 주간 계획.
+- **D. 품질** — 반응형, 번들 크기, 테스트 보강. 리뷰에서 넘어온 항목:
+  - 공통 규칙 모듈 `src/data/rules/` (검증, 활동 메시지, 작업 조작 헬퍼, 데모 작업 풀) 추출 →
+    mock과 server가 함께 사용, 복사본 제거. architect 소유 계약 파일로 지정.
+  - `tests/`, `scripts/`, `server/`를 `tsc -b` 참조에 포함(tsconfig.tools.json + composite).
+- (B 게임 감각은 A 진행 중 필요한 연출만 함께.)
+
 ## 2차 이후 후보
 사무실 배치 편집, 타임라인 되감기, 게임화(XP/레벨/배지), GitHub Issues 연동, 실제 백엔드
 

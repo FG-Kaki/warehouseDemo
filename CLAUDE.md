@@ -17,7 +17,8 @@ and makes the final call. It delegates:
 | Agent | Model | Does |
 |---|---|---|
 | `scaffolder` | Haiku | installs, typecheck/build runs, mechanical chores |
-| `data-engineer` | Sonnet | `src/data/mock/` (DataSource impl, seed, demo mode) |
+| `data-engineer` | Sonnet | `src/data/mock/`, `src/data/api/` (DataSource impls), `tests/contract/` |
+| `backend-engineer` | Sonnet | `server/` (Hono + node:sqlite API, SSE, demo bot) per `docs/API.md` |
 | `scene-builder` | Sonnet | `src/scene/` 3D office |
 | `ui-builder` | Sonnet | `src/ui/` panels, forms, HUD |
 | `reviewer` | Opus | read-only adversarial review before a feature is accepted |
@@ -29,6 +30,7 @@ Rules:
 
 ## Commands
 
-- `npm run dev` — dev server (http://localhost:5173)
+- `npm run dev` — dev server (http://localhost:5173); add `?source=api` to use the local API server
+- `npm run server` — local API server (http://localhost:8787, contract in `docs/API.md`)
 - `npx tsc -b` — typecheck
 - `npm run build` — production build

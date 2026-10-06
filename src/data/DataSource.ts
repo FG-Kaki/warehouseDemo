@@ -23,8 +23,14 @@ export interface DataSource {
    */
   subscribe(listener: (change: Change) => void): () => void
 
-  /** Optional: simulated teammates working on their own. Sources without it hide the toggle. */
-  setDemoMode?(on: boolean): void
+  /**
+   * Optional: simulated teammates working on their own. Sources without it hide the toggle.
+   * reason 'pause' = the store briefly pausing while a dialog/drag is open (a shared server-side
+   * demo may ignore it); 'user' = the user flipped the toggle.
+   */
+  setDemoMode?(on: boolean, reason?: 'user' | 'pause'): void
+  /** Optional: where demo state lives in the source (e.g. a shared server), report it on load. */
+  getDemoMode?(): Promise<boolean>
   /** Optional: wipe local data back to the seed. */
   reset?(): Promise<Workspace>
 }

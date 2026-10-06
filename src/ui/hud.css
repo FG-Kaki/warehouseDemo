@@ -271,3 +271,10 @@ textarea.select { height: auto; padding: 7px 8px; resize: vertical; line-height:
 /* collapsed feed pill: let the text size the pill (flex:1 collapsed it to zero width) */
 .feed-pill .feed-msg { flex: 0 1 auto; max-width: 240px; }
 .diamond { flex: none; display: inline-block; }
+
+/* ---- connection banner / server badge ---- */
+.conn { pointer-events: auto; display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px; font-size: var(--fs-s); box-shadow: var(--shadow); animation: slide-down 0.3s ease both; }
+.conn-bad { background: #fff5f5; border: 1px solid rgba(229, 72, 77, 0.3); color: var(--ink-bad); }
+.conn-warn { background: #fffaf0; border: 1px solid rgba(240, 160, 32, 0.35); color: var(--ink-warn); }
+.spinner-sm { width: 12px; height: 12px; border-width: 2px; border-color: currentColor; border-top-color: transparent; opacity: 0.8; }
+.badge-server { padding: 0 6px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 600; line-height: 16px; }

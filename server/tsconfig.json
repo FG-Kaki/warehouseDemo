@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": [
+    "src",
+    "../src/data/types.ts",
+    "../src/data/meta.ts",
+    "../src/data/selectors.ts",
+    "../src/data/DataSource.ts",
+    "../src/data/mock/seed.ts",
+    "../src/data/mock/text.ts",
+    "../src/data/mock/storage.ts",
+    "../src/office/layout.ts"
+  ]
+}

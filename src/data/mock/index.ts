@@ -100,7 +100,8 @@ export function createMockDataSourceForTest(opts: MockOptions = {}): MockHandle 
       engine.deleteMember(id, reassign)
     },
     subscribe: (listener) => engine.subscribe(listener),
-    setDemoMode(on) {
+    // reason 'pause' (dialog / drag) is handled by the leader grace period; 'user' flips the wish
+    setDemoMode(on, _reason) {
       if (on) demo.start()
       else demo.stop()
     },

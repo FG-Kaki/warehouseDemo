@@ -121,3 +121,11 @@ export type Change =
   | { type: 'member_delete'; id: Id }
   | { type: 'project_upsert'; project: Project }
   | { type: 'activity'; activity: Activity }
+  /** Replace everything (e.g. after a reset, or when a reconnect can't replay missed changes). */
+  | { type: 'snapshot'; workspace: Workspace }
+  /** Remote sources report their link state; local sources never emit this. */
+  | { type: 'connection'; status: ConnectionStatus }
+  /** Shared demo state changed (another client toggled it, server restarted, a toggle failed). */
+  | { type: 'demo'; on: boolean }
+
+export type ConnectionStatus = 'connecting' | 'online' | 'offline'

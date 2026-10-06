@@ -3,7 +3,7 @@
 // (optimistic update → DataSource call → reconcile / roll back with a toast).
 import { create } from 'zustand'
 import { DataError, type DataSource } from './data/DataSource'
-import type { Activity, Change, Id, Member, MemberInput, MemberPatch, Project, Reassign, Task, TaskInput, TaskPatch, TaskStatus } from './data/types'
+import type { Activity, Change, ConnectionStatus, Id, Member, MemberInput, MemberPatch, Project, Reassign, Task, TaskInput, TaskPatch, TaskStatus, Workspace } from './data/types'
 import { EMPTY_FILTERS, type Filters } from './data/selectors'
 
 export type Selection = { kind: 'task'; id: Id } | { kind: 'member'; id: Id }
@@ -32,6 +32,8 @@ interface OfficeState {
   sourceLabel: string
   canDemo: boolean
   canReset: boolean
+  /** Link state for remote sources (null for local ones). */
+  connection: ConnectionStatus | null
   projects: Record<Id, Project>
   members: Record<Id, Member>
   tasks: Record<Id, Task>
@@ -154,7 +156,33 @@ export const useOffice = create<OfficeState>((set, get) => {
       case 'activity':
         if (!s.activity.some((a) => a.id === c.activity.id)) set({ activity: [...s.activity, c.activity].slice(-100) })
         break
+      case 'snapshot':
+        replaceWorkspace(c.workspace)
+        break
+      case 'connection':
+        set({ connection: c.status })
+        break
+      case 'demo':
+        set({ demoMode: c.on })
+        break
     }
+  }
+
+  /** Swap in a whole workspace, dropping view state that points at things that no longer exist. */
+  const replaceWorkspace = (ws: Workspace) => {
+    const members = byId(ws.members)
+    const tasks = byId(ws.tasks)
+    const s = get()
+    const alive = (x: Selection | null) => (x && (x.kind === 'task' ? tasks[x.id] : members[x.id]) ? x : null)
+    set({
+      projects: byId(ws.projects),
+      members,
+      tasks,
+      activity: ws.activity.slice(-100),
+      selection: alive(s.selection),
+      hover: alive(s.hover),
+      filters: { ...s.filters, assigneeIds: s.filters.assigneeIds.filter((id) => id === 'unassigned' || members[id]) },
+    })
   }
 
   return {
@@ -162,6 +190,7 @@ export const useOffice = create<OfficeState>((set, get) => {
     sourceLabel: '',
     canDemo: false,
     canReset: false,
+    connection: null,
     projects: {},
     members: {},
     tasks: {},
@@ -190,9 +219,16 @@ export const useOffice = create<OfficeState>((set, get) => {
     demoMode: false,
     setDemoMode: (on) => {
       const enabled = on && !!source?.setDemoMode
-      const busy = get().dialog !== null || get().drag !== null
-      source?.setDemoMode?.(enabled && !busy)
-      writePref(DEMO_PREF_KEY, enabled ? '1' : '0')
+      if (source?.getDemoMode) {
+        // Shared demo (server): the user's toggle is always a real change; the source reports the
+        // actual state back with a 'demo' change if it differs (e.g. the request failed).
+        source.setDemoMode?.(enabled, 'user')
+      } else {
+        const busy = get().dialog !== null || get().drag !== null
+        if (enabled && busy) source?.setDemoMode?.(false, 'pause')
+        else source?.setDemoMode?.(enabled, 'user')
+        writePref(DEMO_PREF_KEY, enabled ? '1' : '0')
+      }
       set({ demoMode: enabled })
     },
 
@@ -233,11 +269,25 @@ export const useOffice = create<OfficeState>((set, get) => {
       if (src === source) return
       unsubscribe?.()
       unsubscribe = null
-      source?.setDemoMode?.(false)
+      // Stop a local demo we were driving; never switch off a shared (server) demo for everyone.
+      if (source && !source.getDemoMode) source.setDemoMode?.(false, 'user')
       source = src
-      set({ status: 'loading', sourceLabel: src.label, canDemo: !!src.setDemoMode, canReset: !!src.reset })
+      set({ status: 'loading', sourceLabel: src.label, canDemo: !!src.setDemoMode, canReset: !!src.reset, connection: null })
       try {
-        const ws = await src.load()
+        // A remote source may not be up yet: keep retrying while it's unreachable.
+        let ws: Workspace | null = null
+        for (let delay = 1000; !ws; delay = Math.min(delay * 2, 10_000)) {
+          try {
+            ws = await src.load()
+          } catch (e) {
+            if (!(e instanceof DataError && e.code === 'unavailable')) throw e
+            if (source !== src) return
+            set({ connection: 'offline' })
+            await new Promise((r) => setTimeout(r, delay))
+            if (source !== src) return
+          }
+        }
+        if (source !== src) return
         set({
           status: 'ready',
           projects: byId(ws.projects),
@@ -246,8 +296,14 @@ export const useOffice = create<OfficeState>((set, get) => {
           activity: ws.activity.slice(-100),
         })
         unsubscribe = src.subscribe(apply)
-        // Demo teammates start on by default; the toggle is remembered per browser.
-        if (src.setDemoMode) get().setDemoMode(readPref(DEMO_PREF_KEY) !== '0')
+        if (src.getDemoMode) {
+          // Shared demo (e.g. on a server): show its state, don't override it.
+          const on = await src.getDemoMode().catch(() => false)
+          if (source === src) set({ demoMode: on })
+        } else if (src.setDemoMode) {
+          // Local demo teammates start on by default; the toggle is remembered per browser.
+          get().setDemoMode(readPref(DEMO_PREF_KEY) !== '0')
+        }
       } catch (e) {
         set({ status: 'error' })
         fail(e)
@@ -374,11 +430,8 @@ export const useOffice = create<OfficeState>((set, get) => {
       if (!source?.reset) return false
       try {
         const ws = await source.reset()
+        replaceWorkspace(ws)
         set({
-          projects: byId(ws.projects),
-          members: byId(ws.members),
-          tasks: byId(ws.tasks),
-          activity: ws.activity.slice(-100),
           selection: null,
           hover: null,
           filters: EMPTY_FILTERS,
@@ -395,11 +448,12 @@ export const useOffice = create<OfficeState>((set, get) => {
   }
 })
 
-// Demo teammates pause while the user is in the middle of something (dialog open or dragging),
-// so simulated changes never race a user's edit.
+// Local demo teammates pause while the user is in the middle of something (dialog open or
+// dragging), so simulated changes never race a user's edit. A shared server demo ignores 'pause';
+// there the server's manager-touch window keeps the bot off what the user just edited.
 useOffice.subscribe((s, prev) => {
   const busy = s.dialog !== null || s.drag !== null
   const wasBusy = prev.dialog !== null || prev.drag !== null
   if (busy === wasBusy || !s.demoMode) return
-  source?.setDemoMode?.(!busy)
+  source?.setDemoMode?.(!busy, 'pause')
 })
