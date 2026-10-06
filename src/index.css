@@ -1,0 +1,38 @@
+/* OWNER: architect. Global base only; HUD styles live in src/ui/hud.css. */
+:root {
+  --font: 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
+  --bg: #eef1f6;
+  --panel: rgba(255, 255, 255, 0.86);
+  --panel-solid: #ffffff;
+  --panel-border: rgba(20, 30, 60, 0.08);
+  --shadow: 0 8px 28px rgba(30, 45, 90, 0.12), 0 1px 3px rgba(30, 45, 90, 0.08);
+  --text: #1b2333;
+  --text-dim: #6b7487;
+  --accent: #3a63e0;
+  --accent-soft: #e6ecfd;
+  --good: #22b07d;
+  --warn: #f0a020;
+  --bad: #e5484d;
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+button { font: inherit; color: inherit; }

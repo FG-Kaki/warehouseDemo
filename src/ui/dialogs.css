@@ -1,0 +1,40 @@
+/* OWNER: ui-builder. Modal dialogs and form pieces. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  pointer-events: auto;
+  background: rgba(24, 32, 56, 0.35);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: fade-in 0.18s ease both;
+}
+.modal { max-width: 100%; max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: var(--panel-solid); box-shadow: 0 24px 60px rgba(20, 30, 70, 0.35); animation: pop 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.1) both; }
+.modal form { display: flex; flex-direction: column; min-height: 0; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 4px 24px; }
+.modal-head h2 { margin: 0; font-size: var(--fs-l); font-weight: 600; letter-spacing: -0.01em; }
+.modal-body { display: grid; gap: 12px; padding: 8px 24px 16px; overflow: auto; min-height: 0; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
+.modal-text { margin: 0; line-height: 1.6; color: var(--text); }
+.modal .select { height: 36px; }
+.modal textarea.select { height: auto; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.notice { margin: 0; padding: 8px 12px; border-radius: 8px; font-size: var(--fs-s); }
+.notice-warn { background: var(--warn-soft); color: var(--ink-warn); }
+
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 2px solid transparent; border-radius: 50%; background: var(--c); color: #fff; transition: transform 0.12s, box-shadow 0.12s; }
+.swatch:hover { transform: scale(1.12); }
+.swatch.is-on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c); }
+
+.radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.radio:hover { border-color: rgba(20, 30, 60, 0.28); }
+.radio.is-on { border-color: var(--accent); background: var(--accent-soft); }
+.radio.is-disabled { opacity: 0.5; cursor: not-allowed; }
+.radio input { margin: 3px 0 0; accent-color: var(--accent); }
+.radio > span { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.radio small { color: var(--text-dim); font-size: var(--fs-s); }
+.radio .select { margin-top: 6px; }
