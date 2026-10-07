@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { serve } from '@hono/node-server'
+import { TOUCH_WINDOW_MS } from '../../src/data/rules/constants.ts'
 import { createBot } from './bot/index.ts'
 import { openDb } from './db.ts'
 import { createHub } from './events.ts'
@@ -37,7 +38,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<{ url: stri
     startSeq: Number(db.meta('seq') ?? '0'),
     snapshot: () => repo.workspace(),
   })
-  const repo = createRepo(db, hub.publish, { touchWindowMs: opts.touchWindowMs ?? 120_000 })
+  const repo = createRepo(db, hub.publish, { touchWindowMs: opts.touchWindowMs ?? TOUCH_WINDOW_MS })
   repo.seedIfEmpty()
 
   let bot: ReturnType<typeof createBot> | null = null
@@ -65,7 +66,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<{ url: stri
 
   port = (server.address() as AddressInfo).port
   const url = `http://${HOST}:${port}`
-  bot = createBot({ baseUrl: url, tickMs: opts.botTickMs ?? [8000, 15_000], log: (m) => console.warn(m) })
+  bot = createBot({ baseUrl: url, touchWindowMs: opts.touchWindowMs, tickMs: opts.botTickMs ?? [8000, 15_000], log: (m) => console.warn(m) })
   // An explicit option wins (and is stored); otherwise the flag persisted by PUT /api/demo is restored.
   if (opts.demo !== undefined) repo.storeDemo(opts.demo)
   if (repo.demoOn()) bot.start()

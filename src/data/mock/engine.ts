@@ -2,12 +2,11 @@
 // index.ts wraps these with latency; demo.ts drives them to simulate teammates. Every mutation
 // goes through commit(): activity, persistence and change notification all happen in one place.
 import { DataError } from '../DataSource'
-import { AVATAR_VARIANTS, ESTIMATES, PRESENCE_META, PRIORITY_META, STATUSES } from '../meta'
+import { AVATAR_VARIANTS, PRESENCE_META } from '../meta'
 import { taskKey } from '../selectors'
 import type {
   Activity,
   ActivityKind,
-  AgendaOutcome,
   Change,
   Id,
   Meeting,
@@ -23,10 +22,25 @@ import type {
   TaskPatch,
   Workspace,
 } from '../types'
-import { MAX_MEMBERS, OFFICE, deskById } from '../../office/layout'
-import { buildSeed } from './seed'
+import { MAX_MEMBERS, OFFICE } from '../../office/layout'
+import { DEMO_TASK_PREFIX, MAX_ACTIVITY, TOUCH_WINDOW_MS } from '../rules/constants'
+import { applyMemberPatch } from '../rules/members'
+import { dropAgendaTask, dropAttendee, ongoingMeeting, planMeetingEnd, planMeetingStart } from '../rules/meetings'
+import {
+  MEETING_ENDED,
+  MEETING_ONGOING,
+  memberChangeActivity,
+  memberJoinedMessage,
+  memberLeftMessage,
+  notFound,
+  taskChangeActivity,
+  taskCreatedMessage,
+  taskDeletedMessage,
+} from '../rules/messages'
+import { buildSeed } from '../rules/seed'
+import { applyTaskPatch, planMemberRemoval, topOrder as stackTop } from '../rules/tasks'
+import { checkMeetingEnd, checkMeetingStart, checkMemberInput, checkMemberPatch, checkReassign, checkTaskInput, checkTaskPatch, isObj, type Lookup } from '../rules/validate'
 import { META_KEY, STORAGE_KEY, backupCorrupt, loadPersisted, normalizeMeetings, parsePersisted, type Persisted, type StorageLike } from './storage'
-import { eul, iGa, refObject, STATUS_TO, taskObject } from './text'
 
 export interface EngineOptions {
   storage: StorageLike
@@ -83,15 +97,13 @@ export interface MockEngine {
 }
 
 /** Demo mode leaves things the manager touched this recently alone. */
-export const MANAGER_TOUCH_WINDOW_MS = 120_000
+export const MANAGER_TOUCH_WINDOW_MS = TOUCH_WINDOW_MS
 /** Id prefix of tasks created by demo mode; only those are ever pruned automatically. */
-export const DEMO_TASK_PREFIX = 'td'
+export { DEMO_TASK_PREFIX }
 
-const MAX_ACTIVITY = 100
 const PERSIST_DEBOUNCE_MS = 200
 
 const clone = <T>(v: T): T => structuredClone(v)
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 
 export function createEngine(opts: EngineOptions): MockEngine {
   const { storage, random, now } = opts
@@ -476,10 +488,14 @@ export function createEngine(opts: EngineOptions): MockEngine {
   const nameOf = (id: Id | null | undefined) => (id ? findMember(id)?.name ?? '팀원' : '매니저')
 
   /** Order value that puts a task on top of an assignee's stack (or the backlog when null). */
-  function topOrder(assigneeId: Id | null): number {
-    let max = 0
-    for (const t of ensure().workspace.tasks) if (t.assigneeId === assigneeId && t.order > max) max = t.order
-    return max + 1
+  const topOrder = (assigneeId: Id | null) => stackTop(ensure().workspace.tasks, assigneeId)
+
+  const lookup: Lookup = {
+    hasProject: (id) => findProject(id) !== undefined,
+    hasMember: (id) => findMember(id) !== undefined,
+    hasTask: (id) => findTask(id) !== undefined,
+    deskOwner: (deskId) => ensure().workspace.members.find((m) => m.deskId === deskId)?.id,
+    memberCount: () => ensure().workspace.members.length,
   }
 
   interface ActivityDraft {
@@ -540,132 +556,28 @@ export function createEngine(opts: EngineOptions): MockEngine {
     }
   }
 
-  // ---- validation ------------------------------------------------------------
-
-  function checkTitle(v: unknown): string {
-    const title = typeof v === 'string' ? v.trim() : ''
-    if (title.length === 0) throw new DataError('제목을 입력해 주세요')
-    if (title.length > 120) throw new DataError('제목은 120자 이하로 입력해 주세요')
-    return title
-  }
-
-  function checkDescription(v: unknown): string {
-    if (typeof v !== 'string') throw new DataError('설명이 올바르지 않아요')
-    if (v.length > 2000) throw new DataError('설명은 2000자 이하로 입력해 주세요')
-    return v
-  }
-
-  function checkStatus(v: unknown): Task['status'] {
-    if (!STATUSES.includes(v as Task['status'])) throw new DataError('올바르지 않은 상태예요')
-    return v as Task['status']
-  }
-
-  function checkPriority(v: unknown): Task['priority'] {
-    if (typeof v !== 'string' || !(v in PRIORITY_META)) throw new DataError('올바르지 않은 우선순위예요')
-    return v as Task['priority']
-  }
-
-  function checkEstimate(v: unknown): Task['estimate'] {
-    if (!ESTIMATES.includes(v as Task['estimate'])) throw new DataError('예상 포인트가 올바르지 않아요')
-    return v as Task['estimate']
-  }
-
-  function checkDueDate(v: unknown): string | null {
-    if (v === null) return null
-    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
-      const d = new Date(`${v}T00:00:00Z`)
-      if (!Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v) return v
-    }
-    throw new DataError('마감일 형식이 올바르지 않아요')
-  }
-
-  function checkProject(v: unknown): Id {
-    if (typeof v !== 'string' || !findProject(v)) throw new DataError('프로젝트를 찾을 수 없어요')
-    return v
-  }
-
-  function checkAssignee(v: unknown): Id | null {
-    if (v === null) return null
-    if (typeof v !== 'string' || !findMember(v)) throw new DataError('팀원을 찾을 수 없어요')
-    return v
-  }
-
-  function checkOrder(v: unknown): number {
-    if (typeof v !== 'number' || !Number.isFinite(v)) throw new DataError('순서가 올바르지 않아요')
-    return v
-  }
-
-  function checkName(v: unknown): string {
-    const name = typeof v === 'string' ? v.trim() : ''
-    if (name.length === 0) throw new DataError('이름을 입력해 주세요')
-    if (name.length > 30) throw new DataError('이름은 30자 이하로 입력해 주세요')
-    return name
-  }
-
-  function checkRole(v: unknown): string {
-    const role = typeof v === 'string' ? v.trim() : ''
-    if (role.length > 30) throw new DataError('역할은 30자 이하로 입력해 주세요')
-    return role || '팀원'
-  }
-
-  function checkColor(v: unknown): string {
-    if (typeof v !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(v)) throw new DataError('색상이 올바르지 않아요')
-    return v
-  }
-
-  function checkCapacity(v: unknown): number {
-    if (typeof v !== 'number' || !Number.isFinite(v) || v < 1 || v > 40) throw new DataError('주간 여유량은 1~40 사이로 입력해 주세요')
-    return v
-  }
-
-  function checkPresence(v: unknown): Presence {
-    if (typeof v !== 'string' || !(v in PRESENCE_META)) throw new DataError('올바르지 않은 상태예요')
-    return v as Presence
-  }
-
-  function checkVariant(v: unknown): number {
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) throw new DataError('아바타 모양이 올바르지 않아요')
-    return v
-  }
-
-  function checkDesk(deskId: unknown, selfId?: Id): string {
-    if (typeof deskId !== 'string' || !deskById(deskId)) throw new DataError('존재하지 않는 자리예요')
-    const owner = ensure().workspace.members.find((m) => m.deskId === deskId)
-    if (owner && owner.id !== selfId) throw new DataError('이미 사용 중인 자리예요', 'conflict')
-    return deskId
-  }
-
   // ---- tasks -----------------------------------------------------------------
 
   function createTask(input: TaskInput, meta: MutationMeta = {}): Task {
     const s = ensure()
-    if (!isObj(input)) throw new DataError('제목을 입력해 주세요')
-    const title = checkTitle(input.title)
-    const projectId = checkProject(input.projectId)
-    const assigneeId = input.assigneeId === undefined ? null : checkAssignee(input.assigneeId)
-    const description = input.description === undefined ? '' : checkDescription(input.description)
-    const status = input.status === undefined ? 'todo' : checkStatus(input.status)
-    const priority = input.priority === undefined ? 'medium' : checkPriority(input.priority)
-    const estimate = input.estimate === undefined ? 3 : checkEstimate(input.estimate)
-    const dueDate = input.dueDate === undefined ? null : checkDueDate(input.dueDate)
-
+    const clean = checkTaskInput(input, lookup)
     const at = iso()
     const taken = (id: string) => s.workspace.tasks.some((t) => t.id === id)
     const task: Task = {
       id: uid(meta.demo ? DEMO_TASK_PREFIX : 't', taken),
       number: s.nextNumber++,
-      title,
-      description,
-      status,
-      priority,
-      estimate,
-      projectId,
-      assigneeId,
-      dueDate,
-      order: topOrder(assigneeId),
+      title: clean.title,
+      description: clean.description,
+      status: clean.status,
+      priority: clean.priority,
+      estimate: clean.estimate,
+      projectId: clean.projectId,
+      assigneeId: clean.assigneeId,
+      dueDate: clean.dueDate,
+      order: topOrder(clean.assigneeId),
       createdAt: at,
       updatedAt: at,
-      completedAt: status === 'done' ? at : null,
+      completedAt: clean.status === 'done' ? at : null,
       onAgenda: false,
     }
     s.workspace.tasks.push(task)
@@ -673,10 +585,9 @@ export function createEngine(opts: EngineOptions): MockEngine {
 
     let draft: ActivityDraft | null = null
     if (meta.message !== null) {
-      const ref = refOf(task)
       draft = {
         kind: meta.kind ?? 'task_created',
-        message: meta.message ?? (assigneeId ? `새 작업 ${refObject(ref)} 만들어 ${nameOf(assigneeId)} 님에게 배정했어요` : `새 작업 ${refObject(ref)} 만들었어요`),
+        message: meta.message ?? taskCreatedMessage(refOf(task), clean.assigneeId ? nameOf(clean.assigneeId) : null),
         actorId: meta.actorId ?? null,
         taskId: task.id,
       }
@@ -685,68 +596,31 @@ export function createEngine(opts: EngineOptions): MockEngine {
     return clone(task)
   }
 
-  const CONTENT_KEYS: (keyof Task)[] = ['title', 'description', 'priority', 'estimate', 'projectId', 'dueDate']
-
   function updateTask(id: Id, patch: TaskPatch, meta: MutationMeta = {}): Task {
     const task = findTask(id)
-    if (!task) throw new DataError('작업을 찾을 수 없어요', 'not_found')
+    if (!task) throw new DataError(notFound('task'), 'not_found')
     if (!isObj(patch)) throw new DataError('수정할 내용이 올바르지 않아요')
 
     if (!meta.demo) touch('task', id)
-    const next: Partial<Task> = {}
-    if (patch.title !== undefined) next.title = checkTitle(patch.title)
-    if (patch.description !== undefined) next.description = checkDescription(patch.description)
-    if (patch.status !== undefined) next.status = checkStatus(patch.status)
-    if (patch.priority !== undefined) next.priority = checkPriority(patch.priority)
-    if (patch.estimate !== undefined) next.estimate = checkEstimate(patch.estimate)
-    if (patch.projectId !== undefined) next.projectId = checkProject(patch.projectId)
-    if (patch.assigneeId !== undefined) next.assigneeId = checkAssignee(patch.assigneeId)
-    if (patch.dueDate !== undefined) next.dueDate = checkDueDate(patch.dueDate)
-    if (patch.order !== undefined) next.order = checkOrder(patch.order)
-    if (patch.onAgenda !== undefined) {
-      if (typeof patch.onAgenda !== 'boolean') throw new DataError('안건 값이 올바르지 않아요')
-      next.onAgenda = patch.onAgenda
-    }
-    // an agenda item is an open task: asking for it on a done task (or while completing it) is an error
-    if (next.onAgenda === true && (next.status ?? task.status) === 'done') throw new DataError('완료된 작업은 안건으로 올릴 수 없어요')
-
-    const at = iso()
-    if (next.assigneeId !== undefined && next.assigneeId !== task.assigneeId && next.order === undefined) {
-      next.order = topOrder(next.assigneeId)
-    }
-    if (next.status !== undefined && next.status !== task.status) {
-      next.completedAt = next.status === 'done' ? at : null
-    }
-    if (next.status === 'done' && next.onAgenda === undefined) next.onAgenda = false // completing takes it off the agenda
-
-    const changed = (Object.keys(next) as (keyof Task)[]).filter((k) => next[k] !== task[k])
+    const checked = checkTaskPatch(patch, lookup)
+    const { next, changed } = applyTaskPatch(task, checked, { at: iso(), topOrder })
     if (changed.length === 0) return clone(task)
-
-    Object.assign(task, next, { updatedAt: at })
+    Object.assign(task, next)
 
     let draft: ActivityDraft | null = null
     if (meta.message !== null) {
-      const ref = refOf(task)
-      const subject = taskObject(ref, task.title)
-      let kind: ActivityKind | null = null
-      let message = ''
-      if (changed.includes('assigneeId')) {
-        kind = 'task_assigned'
-        message = task.assigneeId ? `${subject} ${nameOf(task.assigneeId)} 님에게 배정했어요` : `${subject} 백로그로 돌렸어요`
-      } else if (changed.includes('status')) {
-        kind = 'task_status'
-        message = task.status === 'done' ? `${subject} 완료 처리했어요` : `${subject} ${STATUS_TO[task.status]} 옮겼어요`
-      } else if (changed.some((k) => CONTENT_KEYS.includes(k))) {
-        kind = 'task_updated'
-        message = `${subject} 수정했어요`
-      }
-      if (kind || meta.message) {
+      const auto = taskChangeActivity(task, changed, refOf(task), {
+        actorId: meta.actorId ?? null,
+        actorName: meta.actorId ? nameOf(meta.actorId) : null,
+        assigneeName: task.assigneeId ? nameOf(task.assigneeId) : null,
+      })
+      if (auto || meta.message) {
         draft = {
-          kind: meta.kind ?? kind ?? 'task_updated',
-          message: meta.message ?? message,
+          kind: meta.kind ?? auto?.kind ?? 'task_updated',
+          message: meta.message ?? auto?.message ?? '',
           actorId: meta.actorId ?? null,
           taskId: task.id,
-          ...(kind === 'task_assigned' && task.assigneeId ? { memberId: task.assigneeId } : {}),
+          ...(auto?.memberId ? { memberId: auto.memberId } : {}),
         }
       }
     }
@@ -757,18 +631,13 @@ export function createEngine(opts: EngineOptions): MockEngine {
   function deleteTask(id: Id, opts: { silent?: boolean; demo?: boolean } = {}): void {
     const s = ensure()
     const index = s.workspace.tasks.findIndex((t) => t.id === id)
-    if (index < 0) throw new DataError('작업을 찾을 수 없어요', 'not_found')
+    if (index < 0) throw new DataError(notFound('task'), 'not_found')
     const [task] = s.workspace.tasks.splice(index, 1)
     if (!opts.demo) touch('task', id)
-    const draft: ActivityDraft | null = opts.silent
-      ? null
-      : { kind: 'task_deleted', message: `${taskObject(refOf(task), task.title)} 삭제했어요`, actorId: null }
+    const draft: ActivityDraft | null = opts.silent ? null : { kind: 'task_deleted', message: taskDeletedMessage(refOf(task), task.title), actorId: null }
     const changes: Change[] = [{ type: 'task_delete', id }]
-    const meeting = ongoingMeeting()
-    if (meeting?.agendaTaskIds.includes(id)) {
-      meeting.agendaTaskIds = meeting.agendaTaskIds.filter((x) => x !== id)
-      changes.push({ type: 'meeting_upsert', meeting })
-    }
+    const shrunk = dropAgendaTask(ongoingMeeting(s.workspace.meetings), id)
+    if (shrunk) changes.push({ type: 'meeting_upsert', meeting: storeMeeting(shrunk) })
     commit(changes, draft)
   }
 
@@ -776,123 +645,61 @@ export function createEngine(opts: EngineOptions): MockEngine {
 
   function createMember(input: MemberInput): Member {
     const s = ensure()
-    if (!isObj(input)) throw new DataError('이름을 입력해 주세요')
-    const name = checkName(input.name)
-    const role = checkRole(input.role)
-    const color = checkColor(input.color)
-    const capacity = checkCapacity(input.capacity)
-    const avatarVariant = input.avatarVariant === undefined ? Math.floor(random() * AVATAR_VARIANTS) : checkVariant(input.avatarVariant)
-    if (s.workspace.members.length >= MAX_MEMBERS) throw new DataError('자리가 모두 찼어요', 'conflict')
-    let deskId: string
-    if (input.deskId !== undefined) {
-      deskId = checkDesk(input.deskId)
-    } else {
-      const used = new Set(s.workspace.members.map((m) => m.deskId))
-      const free = OFFICE.desks.find((d) => !used.has(d.id))
-      if (!free) throw new DataError('자리가 모두 찼어요', 'conflict')
-      deskId = free.id
-    }
+    const clean = checkMemberInput(input, lookup, MAX_MEMBERS)
+    const avatarVariant = clean.avatarVariant ?? Math.floor(random() * AVATAR_VARIANTS)
     const member: Member = {
       id: uid('m', (id) => s.workspace.members.some((m) => m.id === id)),
-      name,
-      role,
-      color,
-      capacity,
-      deskId,
+      name: clean.name,
+      role: clean.role,
+      color: clean.color,
+      capacity: clean.capacity,
+      deskId: clean.deskId,
       presence: 'working',
       avatarVariant,
       joinedAt: iso(),
     }
     s.workspace.members.push(member)
     touch('member', member.id)
-    commit([{ type: 'member_upsert', member }], { kind: 'member_joined', message: `${name} 님이 합류했어요`, actorId: null, memberId: member.id })
+    commit([{ type: 'member_upsert', member }], { kind: 'member_joined', message: memberJoinedMessage(member.name), actorId: null, memberId: member.id })
     return clone(member)
-  }
-
-  const PRESENCE_MESSAGE: Record<Presence, string> = {
-    working: '님이 작업을 시작했어요',
-    meeting: '님이 회의에 들어갔어요',
-    break: '님이 휴식 중이에요',
-    away: '님이 자리를 비웠어요',
   }
 
   function updateMember(id: Id, patch: MemberPatch): Member {
     const member = findMember(id)
-    if (!member) throw new DataError('팀원을 찾을 수 없어요', 'not_found')
+    if (!member) throw new DataError(notFound('member'), 'not_found')
     if (!isObj(patch)) throw new DataError('수정할 내용이 올바르지 않아요')
 
     touch('member', id) // any manager patch counts, not only presence (same rule as the server)
-    const next: Partial<Member> = {}
-    if (patch.name !== undefined) next.name = checkName(patch.name)
-    if (patch.role !== undefined) next.role = checkRole(patch.role)
-    if (patch.color !== undefined) next.color = checkColor(patch.color)
-    if (patch.capacity !== undefined) next.capacity = checkCapacity(patch.capacity)
-    if (patch.deskId !== undefined) next.deskId = checkDesk(patch.deskId, id)
-    if (patch.presence !== undefined) next.presence = checkPresence(patch.presence)
-
-    const changed = (Object.keys(next) as (keyof Member)[]).filter((k) => next[k] !== member[k])
+    const { next, changed, onlyPresence } = applyMemberPatch(member, checkMemberPatch(patch, lookup, id))
     if (changed.length === 0) return clone(member)
     Object.assign(member, next)
 
-    const onlyPresence = changed.length === 1 && changed[0] === 'presence'
-    commit([{ type: 'member_upsert', member }], {
-      kind: onlyPresence ? 'presence' : 'member_updated',
-      message: onlyPresence ? `${member.name} ${PRESENCE_MESSAGE[member.presence]}` : `${member.name} 님의 정보를 수정했어요`,
-      actorId: null,
-      memberId: id,
-    })
+    const activity = memberChangeActivity(id, member.name, member.presence, onlyPresence)
+    commit([{ type: 'member_upsert', member }], { ...activity, actorId: null })
     return clone(member)
   }
 
   function deleteMember(id: Id, reassign: Reassign): void {
     const s = ensure()
     const member = findMember(id)
-    if (!member) throw new DataError('팀원을 찾을 수 없어요', 'not_found')
-    if (!isObj(reassign) || (reassign.mode !== 'backlog' && reassign.mode !== 'member')) throw new DataError('작업 처리 방법을 선택해 주세요')
-    let target: Member | undefined
-    if (reassign.mode === 'member') {
-      target = findMember(reassign.memberId)
-      if (!target) throw new DataError('작업을 넘겨받을 팀원을 찾을 수 없어요')
-      if (target.id === id) throw new DataError('같은 팀원에게는 넘길 수 없어요')
-    }
+    if (!member) throw new DataError(notFound('member'), 'not_found')
+    const how = checkReassign(reassign, lookup, id)
+    const target = how.mode === 'member' ? findMember(how.memberId) : undefined
 
-    const at = iso()
+    const { tasks: moved, movedOpen } = planMemberRemoval(id, s.workspace.tasks, how, iso())
     const changes: Change[] = []
-    let movedOpen = 0
-    // Stable order: keep the member's own stack order when moving tasks to a new stack.
-    const theirs = s.workspace.tasks.filter((t) => t.assigneeId === id).sort((a, b) => a.order - b.order)
-    for (const task of theirs) {
-      if (task.status === 'done') {
-        task.assigneeId = null
-      } else if (target) {
-        task.assigneeId = target.id
-        task.order = topOrder(target.id)
-        movedOpen++
-      } else {
-        task.assigneeId = null
-        task.order = topOrder(null)
-        if (task.status === 'in_progress' || task.status === 'review') task.status = 'todo'
-        movedOpen++
-      }
-      task.updatedAt = at
+    for (const copy of moved) {
+      const task = findTask(copy.id)!
+      Object.assign(task, copy)
       touch('task', task.id)
       changes.push({ type: 'task_upsert', task })
     }
     s.workspace.members.splice(s.workspace.members.indexOf(member), 1)
     changes.push({ type: 'member_delete', id })
-    const meeting = ongoingMeeting()
-    if (meeting?.attendeeIds.includes(id)) {
-      meeting.attendeeIds = meeting.attendeeIds.filter((x) => x !== id)
-      changes.push({ type: 'meeting_upsert', meeting })
-    }
+    const shrunk = dropAttendee(ongoingMeeting(s.workspace.meetings), id)
+    if (shrunk) changes.push({ type: 'meeting_upsert', meeting: storeMeeting(shrunk) })
 
-    let message = `${member.name} 님이 팀을 떠났어요`
-    if (movedOpen > 0) {
-      message = target
-        ? `${member.name} 님이 팀을 떠나 작업 ${movedOpen}개를 ${target.name} 님에게 넘겼어요`
-        : `${member.name} 님이 팀을 떠나 작업 ${movedOpen}개를 백로그로 옮겼어요`
-    }
-    commit(changes, { kind: 'member_left', message, actorId: null, memberId: id })
+    commit(changes, { kind: 'member_left', message: memberLeftMessage(member.name, movedOpen, target?.name ?? null), actorId: null, memberId: id })
   }
 
   function setPresence(ids: Id[], presence: Presence, activity?: { message: string; memberId?: Id } | null): void {
@@ -909,149 +716,68 @@ export function createEngine(opts: EngineOptions): MockEngine {
 
   // ---- meetings --------------------------------------------------------------
 
-  const ongoingMeeting = (): Meeting | undefined => ensure().workspace.meetings.find((m) => m.status === 'ongoing')
+  /** Writes a planned meeting back into the live state (same object identity per id) and returns it. */
+  function storeMeeting(next: Meeting): Meeting {
+    const meetings = ensure().workspace.meetings
+    const existing = meetings.find((m) => m.id === next.id)
+    if (existing) return Object.assign(existing, next)
+    meetings.push(next)
+    return next
+  }
 
   function startMeeting(input: MeetingStart): Meeting {
     const s = ensure()
-    if (!isObj(input)) throw new DataError('회의 이름을 입력해 주세요')
-    const title = typeof input.title === 'string' ? input.title.trim() : ''
-    if (title.length === 0) throw new DataError('회의 이름을 입력해 주세요')
-    if (title.length > 60) throw new DataError('회의 이름은 60자 이하로 입력해 주세요')
-    if (!Array.isArray(input.attendeeIds) || input.attendeeIds.length === 0) throw new DataError('참석자를 한 명 이상 골라 주세요')
-    const attendees: Member[] = []
-    for (const id of input.attendeeIds) {
-      const member = typeof id === 'string' ? findMember(id) : undefined
-      if (!member) throw new DataError('팀원을 찾을 수 없어요')
-      if (attendees.includes(member)) throw new DataError('같은 참석자가 여러 번 들어 있어요')
-      attendees.push(member)
-    }
-    if (ongoingMeeting()) throw new DataError('이미 회의가 진행 중이에요', 'conflict')
+    const { title, attendeeIds } = checkMeetingStart(input, lookup)
+    if (ongoingMeeting(s.workspace.meetings)) throw new DataError(MEETING_ONGOING, 'conflict')
 
-    const weight = (t: Task) => PRIORITY_META[t.priority].weight
-    const agenda = s.workspace.tasks
-      .filter((t) => t.onAgenda && t.status !== 'done')
-      .sort((a, b) => weight(b) - weight(a) || a.number - b.number)
-    const meeting: Meeting = {
+    const plan = planMeetingStart({
       id: uid('mt', (id) => s.workspace.meetings.some((m) => m.id === id)),
       title,
-      attendeeIds: attendees.map((m) => m.id),
-      agendaTaskIds: agenda.map((t) => t.id),
-      status: 'ongoing',
-      startedAt: iso(),
-      endedAt: null,
-      notes: '',
-      outcomes: [],
-    }
-    s.workspace.meetings.push(meeting)
-
+      attendeeIds,
+      tasks: s.workspace.tasks,
+      members: s.workspace.members,
+      at: iso(),
+    })
+    const meeting = storeMeeting(plan.meeting)
     const changes: Change[] = []
-    for (const member of attendees) {
-      member.presence = 'meeting'
+    for (const copy of plan.members) {
+      const member = findMember(copy.id)!
+      Object.assign(member, copy)
       touch('member', member.id) // the manager moved them: demo mode keeps its hands off for a while
       setPlan(member.id, null) // no planned return from an earlier informal meeting / break
       changes.push({ type: 'member_upsert', member })
     }
     changes.push({ type: 'meeting_upsert', meeting })
-    commit(changes, {
-      kind: 'meeting_started',
-      message: `${title}${eul(title)} 시작했어요 · 참석 ${attendees.length}명 · 안건 ${agenda.length}건`,
-      actorId: null,
-    })
+    commit(changes, { kind: 'meeting_started', message: plan.message, actorId: null })
     return clone(meeting)
   }
 
   function endMeeting(id: Id, result: MeetingEnd): Meeting {
     const s = ensure()
-    const meeting = s.workspace.meetings.find((m) => m.id === id)
-    if (!meeting) throw new DataError('회의를 찾을 수 없어요', 'not_found')
-    if (meeting.status !== 'ongoing') throw new DataError('이미 끝난 회의예요', 'conflict')
-    if (!isObj(result)) throw new DataError('회의 결과가 올바르지 않아요')
-    const notes = result.notes === undefined ? '' : result.notes
-    if (typeof notes !== 'string') throw new DataError('회의 메모가 올바르지 않아요')
-    if (notes.length > 2000) throw new DataError('회의록은 2000자 이하로 입력해 주세요')
-    const rawOutcomes = result.outcomes === undefined ? [] : result.outcomes
-    if (!Array.isArray(rawOutcomes)) throw new DataError('회의 결정이 올바르지 않아요')
+    const current = s.workspace.meetings.find((m) => m.id === id)
+    if (!current) throw new DataError(notFound('meeting'), 'not_found')
+    if (current.status !== 'ongoing') throw new DataError(MEETING_ENDED, 'conflict')
+    const { notes, outcomes } = checkMeetingEnd(result, current.agendaTaskIds, lookup)
 
-    const outcomes: AgendaOutcome[] = []
-    const decided = new Set<Id>()
-    for (const raw of rawOutcomes) {
-      if (!isObj(raw) || typeof raw.taskId !== 'string') throw new DataError('회의 결정이 올바르지 않아요')
-      if (decided.has(raw.taskId)) throw new DataError('같은 작업에 결정이 여러 개 있어요')
-      // a task deleted since the agenda was shown is skipped silently; any other task must be on the agenda
-      const exists = findTask(raw.taskId) !== undefined
-      if (!meeting.agendaTaskIds.includes(raw.taskId) && exists) throw new DataError('안건에 없는 작업이에요')
-      decided.add(raw.taskId)
-      switch (raw.action) {
-        case 'assign':
-          if (typeof raw.memberId !== 'string' || !findMember(raw.memberId)) throw new DataError('팀원을 찾을 수 없어요')
-          if (exists) outcomes.push({ taskId: raw.taskId, action: 'assign', memberId: raw.memberId })
-          break
-        case 'status':
-          {
-            const status = checkStatus(raw.status)
-            if (exists) outcomes.push({ taskId: raw.taskId, action: 'status', status })
-          }
-          break
-        case 'backlog':
-        case 'keep':
-          if (exists) outcomes.push({ taskId: raw.taskId, action: raw.action }) // deleted tasks drop out of the record
-          break
-        default:
-          throw new DataError('올바르지 않은 결정이에요')
-      }
-    }
-
-    const at = iso()
+    const plan = planMeetingEnd({ meeting: current, notes, outcomes, tasks: s.workspace.tasks, members: s.workspace.members, at: iso() })
     const changes: Change[] = []
-    const byTask = new Map(outcomes.map((o) => [o.taskId, o]))
-    const decisions = outcomes.filter((o) => o.action !== 'keep').length
-    for (const taskId of meeting.agendaTaskIds) {
-      const task = findTask(taskId)
-      if (!task) continue // deleted meanwhile
-      const outcome = byTask.get(taskId) ?? ({ taskId, action: 'keep' } as const)
-      // outcomes apply to the task as it is now, even one completed during the meeting (a status outcome can reopen it)
-      const before = JSON.stringify(task)
-      if (outcome.action === 'assign') {
-        if (task.assigneeId !== outcome.memberId) {
-          task.assigneeId = outcome.memberId
-          task.order = topOrder(outcome.memberId)
-        }
-      } else if (outcome.action === 'backlog') {
-        if (task.assigneeId !== null) {
-          task.assigneeId = null
-          task.order = topOrder(null)
-        }
-        if (task.status === 'in_progress' || task.status === 'review') task.status = 'todo'
-      } else if (outcome.action === 'status') {
-        if (outcome.status !== task.status) {
-          task.status = outcome.status
-          task.completedAt = outcome.status === 'done' ? at : null
-        }
-      }
-      if (outcome.action !== 'keep') task.onAgenda = false // not settled ('keep' / no outcome): stays on the agenda
-      if (JSON.stringify(task) === before) continue // nothing changed: write and emit nothing
-      task.updatedAt = at
+    for (const copy of plan.tasks) {
+      const task = findTask(copy.id)!
+      Object.assign(task, copy)
       touch('task', task.id)
       changes.push({ type: 'task_upsert', task })
     }
-
-    meeting.status = 'ended'
-    meeting.endedAt = at
-    meeting.notes = notes
-    meeting.outcomes = outcomes
-    for (const memberId of meeting.attendeeIds) {
-      const member = findMember(memberId)
-      if (!member) continue
-      touch('member', memberId)
-      if (member.presence !== 'meeting') continue // e.g. the manager sent them on a break meanwhile
-      member.presence = 'working'
-      setPlan(memberId, null)
+    const meeting = storeMeeting(plan.meeting)
+    for (const memberId of meeting.attendeeIds) if (findMember(memberId)) touch('member', memberId)
+    for (const copy of plan.members) {
+      const member = findMember(copy.id)!
+      Object.assign(member, copy)
+      setPlan(member.id, null)
       changes.push({ type: 'member_upsert', member })
     }
     changes.push({ type: 'meeting_upsert', meeting })
-    normalizeMeetings(s.workspace.meetings, at)
-    const title = meeting.title
-    commit(changes, { kind: 'meeting_ended', message: `${title}${iGa(title)} 끝났어요 · 결정 ${decisions}건`, actorId: null })
+    normalizeMeetings(s.workspace.meetings, meeting.endedAt ?? iso())
+    commit(changes, { kind: 'meeting_ended', message: plan.message, actorId: null })
     return clone(meeting)
   }
 

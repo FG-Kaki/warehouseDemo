@@ -1,16 +1,17 @@
 // The demo bot: simulated teammates, written as a plain HTTP client of the public API. It never
 // touches the database or server internals; every action is a fetch() with `X-Actor`, exactly what
-// a real person's client would send. Behaviour mirrors src/data/mock/demo.ts (weights, timings,
+// a real person's client would send. What to do next comes from src/data/rules/demo.ts (shared with the mock demo: weights, timings,
 // meeting/break returns). `409 conflict` (the manager touched it) means "skip this one".
-import { PRIORITY_META } from '../../../src/data/meta.ts'
-import { backlogTasks, todayIso, workload } from '../../../src/data/selectors.ts'
-import type { Estimate, Id, Member, Presence, Task, Workspace } from '../../../src/data/types.ts'
-import { POOL } from './pool.ts'
+import { TOUCH_WINDOW_MS } from '../../../src/data/rules/constants.ts'
+import { RETURN_SECONDS, demoTasksToPrune, planDemoAction } from '../../../src/data/rules/demo.ts'
+import type { Id, Member, Presence, Workspace } from '../../../src/data/types.ts'
 
 export interface BotOptions {
   baseUrl: string
   /** Real-time gap between actions (ms). */
   tickMs: [number, number]
+  /** How long a 409'd task / member is left alone (the server's manager-touch window). */
+  touchWindowMs?: number
   random?: () => number
   log?: (message: string) => void
 }
@@ -23,13 +24,6 @@ export interface Bot {
   /** Stops everything, including pending returns. */
   dispose(): void
 }
-
-const MAX_BOT_DONE = 40
-const MAX_BACKLOG = 10
-/** Chance that a routine move (start / to review) leaves a feed row. */
-const ROUTINE_FEED_CHANCE = 0.35
-/** Server-assigned id prefix of tasks created by actor requests (see repo.ts). */
-const BOT_TASK_PREFIX = 'td_'
 
 interface Plan {
   at: number
@@ -54,7 +48,6 @@ export function createBot(opts: BotOptions): Bot {
   const plans = new Map<Id, Plan>()
   let chain: Promise<void> = Promise.resolve()
 
-  const pick = <T>(list: T[]): T => list[Math.min(list.length - 1, Math.floor(random() * list.length))]
   const between = (min: number, max: number) => min + random() * (max - min)
 
   /** Runs one thing at a time, so ticks and returns never interleave their requests. */
@@ -91,12 +84,28 @@ export function createBot(opts: BotOptions): Bot {
     return r.status === 200 ? (r.body as Workspace) : null
   }
 
-  const patchTask = (id: Id, patch: object, actor: Member, quiet = false) => request('PATCH', `/api/tasks/${id}`, { body: patch, actor: actor.id, quiet })
-  const patchPresence = (m: Member, presence: Presence, quiet = true) => request('PATCH', `/api/members/${m.id}`, { body: { presence }, actor: m.id, quiet })
+  /** Tasks / members that answered 409 ("touched by the manager"): skipped until the touch window is over. */
+  const blocked = new Map<string, number>()
+  const isBlocked = (key: string) => {
+    const until = blocked.get(key)
+    if (until === undefined) return false
+    if (Date.now() < until) return true
+    blocked.delete(key)
+    return false
+  }
+  async function guarded(key: string, p: Promise<Result>): Promise<Result> {
+    const r = await p
+    if (r.status === 409) blocked.set(key, Date.now() + (opts.touchWindowMs ?? TOUCH_WINDOW_MS))
+    return r
+  }
+  const patchTask = (id: Id, patch: object, actor: Member, quiet = false) =>
+    guarded(`task:${id}`, request('PATCH', `/api/tasks/${id}`, { body: patch, actor: actor.id, quiet }))
+  const patchPresence = (m: Member, presence: Presence, quiet = true) =>
+    guarded(`member:${m.id}`, request('PATCH', `/api/members/${m.id}`, { body: { presence }, actor: m.id, quiet }))
 
   // ---- planned returns --------------------------------------------------------------
 
-  function plan(id: Id, presence: Presence, seconds: [number, number]) {
+  function plan(id: Id, presence: Presence, seconds: readonly [number, number]) {
     plans.set(id, { at: Date.now() + between(seconds[0], seconds[1]) * 1000, presence })
     armReturns()
   }
@@ -147,9 +156,9 @@ export function createBot(opts: BotOptions): Bot {
     for (const m of ws.members) {
       // Attendees of the manager's meeting come back when the manager ends it, never by the bot.
       if (m.presence === 'working' || plans.has(m.id) || inMeeting.has(m.id)) continue
-      if (defaults) plan(m.id, m.presence, [8, 15])
-      else if (m.presence === 'meeting') plan(m.id, 'meeting', [20, 40])
-      else if (m.presence === 'break') plan(m.id, 'break', [15, 30])
+      if (defaults) plan(m.id, m.presence, RETURN_SECONDS.adopt)
+      else if (m.presence === 'meeting') plan(m.id, 'meeting', RETURN_SECONDS.meeting)
+      else if (m.presence === 'break') plan(m.id, 'break', RETURN_SECONDS.break)
     }
   }
 
@@ -163,180 +172,57 @@ export function createBot(opts: BotOptions): Bot {
     await housekeeping(ws)
   }
 
-  interface Candidate {
-    name: string
-    weight: number
-    run: () => Promise<Result | void>
-  }
-
+  /** Asks the shared demo rules what a teammate would do next, then does it over HTTP. */
   async function act(ws: Workspace) {
-    const members = ws.members
-    const working = members.filter((m) => m.presence === 'working')
-    const byId = new Map(members.map((m) => [m.id, m]))
-    const routineQuiet = () => random() >= ROUTINE_FEED_CHANCE
-    const candidates: Candidate[] = []
-    const weightOf = (t: Task) => PRIORITY_META[t.priority].weight
-    // The agenda belongs to the team lead: open onAgenda tasks are never taken, started, moved or completed.
-    const free = ws.tasks.filter((t) => !t.onAgenda)
-
-    // todo -> in_progress: a working member with nothing in progress starts their best todo.
-    const starters = working
-      .filter((m) => !ws.tasks.some((t) => t.assigneeId === m.id && t.status === 'in_progress'))
-      .map((m) => ({
-        m,
-        task: free
-          .filter((t) => t.assigneeId === m.id && t.status === 'todo')
-          .sort((a, b) => weightOf(b) - weightOf(a) || (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999') || a.order - b.order)[0],
-      }))
-      .filter((x) => x.task)
-    if (starters.length > 0) {
-      candidates.push({
-        name: 'start',
-        weight: 22,
-        run: () => {
-          const { m, task } = pick(starters)
-          return patchTask(task.id, { status: 'in_progress' }, m, routineQuiet())
-        },
-      })
-    }
-
-    // in_progress -> review
-    const inProgress = free.filter((t) => t.status === 'in_progress' && working.some((m) => m.id === t.assigneeId))
-    if (inProgress.length > 0) {
-      candidates.push({
-        name: 'review',
-        weight: 16,
-        run: () => {
-          const task = pick(inProgress)
-          return patchTask(task.id, { status: 'review' }, byId.get(task.assigneeId!)!, routineQuiet())
-        },
-      })
-    }
-
-    // review -> done: someone (preferably another member) finishes the review.
-    const inReview = free.filter((t) => t.status === 'review')
-    if (inReview.length > 0 && working.length > 0) {
-      candidates.push({
-        name: 'done',
-        weight: 18,
-        run: () => {
-          const task = pick(inReview)
-          const others = working.filter((m) => m.id !== task.assigneeId)
-          const actor = others.length > 0 ? pick(others) : working.find((m) => m.id === task.assigneeId) ?? working[0]
-          return patchTask(task.id, { status: 'done' }, actor)
-        },
-      })
-    }
-
-    // backlog -> a light member takes the most important unassigned task.
-    const record: Record<Id, Task> = Object.fromEntries(ws.tasks.map((t) => [t.id, t]))
-    const backlog = backlogTasks(Object.fromEntries(free.map((t) => [t.id, t])))
-    const light = working.map((m) => ({ m, w: workload(m, record) })).filter((x) => x.w < 0.8)
-    if (backlog.length > 0 && light.length > 0) {
-      candidates.push({
-        name: 'take',
-        weight: 14,
-        run: () => {
-          const lowest = Math.min(...light.map((x) => x.w))
-          const { m } = pick(light.filter((x) => x.w === lowest))
-          return patchTask(backlog[0].id, { assigneeId: m.id }, m)
-        },
-      })
-    }
-
-    // new incoming work, mostly when the backlog runs dry.
-    const newWeight = backlog.length < 4 ? 26 : backlog.length < MAX_BACKLOG ? 5 : 0
-    if (newWeight > 0 && members.length > 0) candidates.push({ name: 'incoming', weight: newWeight, run: () => createIncoming(ws, working.length > 0 ? pick(working) : pick(members)) })
-
-    // presence
-    const room = Math.floor(members.length / 2) - (members.length - working.length)
-    const meetingRunning = [...plans.values()].some((p) => p.presence === 'meeting')
-    // No informal meeting while a real one is ongoing (the meeting room is taken).
-    const realMeeting = ws.meetings.some((m) => m.status === 'ongoing')
-    if (!meetingRunning && !realMeeting && room >= 2 && working.length >= 3) {
-      candidates.push({
-        name: 'meeting',
-        weight: 3,
-        run: async () => {
-          const k = Math.min(room, 2 + Math.floor(random() * 2))
-          const pool = [...working]
-          const group: Member[] = []
-          while (group.length < k && pool.length > 0) group.push(pool.splice(Math.floor(random() * pool.length), 1)[0])
-          // Only the first member leaves a feed row ("... 님이 회의에 들어갔어요").
-          for (const [i, m] of group.entries()) {
-            const r = await patchPresence(m, 'meeting', i > 0)
-            if (r.status === 200) plan(m.id, 'meeting', [20, 40])
-          }
-        },
-      })
-    }
-    if (room >= 1 && working.length > 0) {
-      candidates.push({
-        name: 'break',
-        weight: 5,
-        run: async () => {
-          const m = pick(working)
-          const r = await patchPresence(m, 'break')
-          if (r.status === 200) plan(m.id, 'break', [15, 30])
-          return r
-        },
-      })
-      candidates.push({
-        name: 'away',
-        weight: 1,
-        run: async () => {
-          const m = pick(working)
-          const r = await patchPresence(m, 'away')
-          if (r.status === 200) plan(m.id, 'away', [40, 70])
-          return r
-        },
-      })
-    }
-
-    const total = candidates.reduce((s, c) => s + c.weight, 0)
-    if (total <= 0) return
-    let r = random() * total
-    let chosen = candidates[candidates.length - 1]
-    for (const c of candidates) {
-      r -= c.weight
-      if (r < 0) {
-        chosen = c
+    const byId = new Map(ws.members.map((m) => [m.id, m]))
+    const action = planDemoAction({
+      ws,
+      now: new Date(),
+      random,
+      incomingActor: true,
+      isTaskFree: (t) => !isBlocked(`task:${t.id}`),
+      isMemberFree: (m) => !isBlocked(`member:${m.id}`),
+      informalMeetingPlanned: [...plans.values()].some((p) => p.presence === 'meeting'),
+    })
+    if (!action) return
+    // A 409 (manager touched it, or an attendee of a real meeting) just means this tick does nothing.
+    switch (action.name) {
+      case 'start':
+        await patchTask(action.taskId, { status: 'in_progress' }, byId.get(action.actorId)!, !action.feed)
+        break
+      case 'review':
+        await patchTask(action.taskId, { status: 'review' }, byId.get(action.actorId)!, !action.feed)
+        break
+      case 'done':
+        await patchTask(action.taskId, { status: 'done' }, byId.get(action.actorId)!)
+        break
+      case 'take':
+        await patchTask(action.taskId, { assigneeId: action.actorId }, byId.get(action.actorId)!)
+        break
+      case 'incoming':
+        await request('POST', '/api/tasks', { body: action.task, actor: action.actorId ?? undefined })
+        break
+      case 'meeting':
+        // Only the first member leaves a feed row ("... 님이 회의에 들어갔어요").
+        for (const [i, id] of action.memberIds.entries()) {
+          const r = await patchPresence(byId.get(id)!, 'meeting', i > 0)
+          if (r.status === 200) plan(id, 'meeting', RETURN_SECONDS.meeting)
+        }
+        break
+      case 'break':
+      case 'away': {
+        const r = await patchPresence(byId.get(action.memberId)!, action.name)
+        if (r.status === 200) plan(action.memberId, action.name, RETURN_SECONDS[action.name])
         break
       }
     }
-    await chosen.run() // a 409 (manager touched it) just means this tick does nothing
-  }
-
-  async function createIncoming(ws: Workspace, actor: Member) {
-    const item = pick(POOL)
-    const project = ws.projects.find((p) => p.key === item.p) ?? ws.projects[0]
-    if (!project) return
-    // Re-use the pool with a numbered suffix once a title already exists.
-    const same = ws.tasks.filter((t) => t.title === item.title || t.title.startsWith(`${item.title} `)).length
-    const title = same > 0 ? `${item.title} ${same + 1}차` : item.title
-    let dueDate: string | null = null
-    if (random() > 0.3) {
-      const d = new Date()
-      d.setDate(d.getDate() + 3 + Math.floor(random() * 12))
-      dueDate = todayIso(d)
-    }
-    const estimate: Estimate = item.est
-    return request('POST', '/api/tasks', {
-      body: { title, projectId: project.id, description: item.desc, priority: item.pri, estimate, dueDate },
-      actor: actor.id,
-    })
   }
 
   /** Prunes only the bot's own done tasks, oldest first. Seed and manager tasks stay. */
   async function housekeeping(ws: Workspace) {
-    const done = ws.tasks.filter((t) => t.status === 'done' && t.id.startsWith(BOT_TASK_PREFIX))
-    if (done.length <= MAX_BOT_DONE) return
     const actor = ws.members[0]
     if (!actor) return
-    done.sort((a, b) => (a.completedAt ?? '').localeCompare(b.completedAt ?? ''))
-    for (const t of done.slice(0, done.length - MAX_BOT_DONE)) {
-      await request('DELETE', `/api/tasks/${t.id}`, { actor: actor.id, quiet: true })
-    }
+    for (const t of demoTasksToPrune(ws.tasks)) await request('DELETE', `/api/tasks/${t.id}`, { actor: actor.id, quiet: true })
   }
 
   // ---- timer ------------------------------------------------------------------------

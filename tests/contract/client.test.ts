@@ -438,7 +438,7 @@ describe('ApiDataSource client mechanics', () => {
         setTimeout(() => res.end(), 30)
       } else {
         // the server could not replay: one snapshot, then business as usual
-        res.write(sse(20, { type: 'snapshot', workspace: { projects: [], members: [], tasks: [t('t2')], activity: [] } }))
+        res.write(sse(20, { type: 'snapshot', workspace: { projects: [], members: [], tasks: [t('t2')], meetings: [], activity: [] } }))
         res.write(sse(21, { type: 'task_upsert', task: t('t3') }))
       }
     }

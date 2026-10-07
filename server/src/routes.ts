@@ -4,7 +4,7 @@ import { DataError, type DataErrorCode } from '../../src/data/DataSource.ts'
 import type { Reassign } from '../../src/data/types.ts'
 import type { Hub } from './events.ts'
 import { MANAGER, type Ctx, type Repo } from './repo.ts'
-import { isObj } from './validate.ts'
+import { isObj } from '../../src/data/rules/validate.ts'
 
 export interface RouteDeps {
   repo: Repo

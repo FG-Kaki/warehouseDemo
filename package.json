@@ -11,8 +11,8 @@
     "server": "tsx watch server/src/index.ts",
     "server:once": "tsx server/src/index.ts",
     "dev:all": "concurrently -k -n web,api -c blue,green \"npm:dev\" \"npm:server\"",
-    "typecheck:server": "tsc -p server/tsconfig.json --noEmit",
-    "test:contract": "tsx --test tests/contract/*.test.ts"
+    "test:contract": "tsx --test tests/contract/*.test.ts",
+    "postbuild": "node scripts/check-bundle.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

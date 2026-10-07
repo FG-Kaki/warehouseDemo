@@ -3,6 +3,7 @@
 import { ESTIMATES, PRESENCE_META, PRIORITY_META, STATUS_META } from '../meta'
 import type { Activity, AgendaOutcome, Meeting, Member, Project, Task, Workspace } from '../types'
 import { MAX_MEMBERS, OFFICE, deskById } from '../../office/layout'
+import { MAX_ENDED_MEETINGS } from '../rules/meetings'
 
 export interface StorageLike {
   getItem(key: string): string | null
@@ -289,7 +290,6 @@ export function parsePersisted(raw: string, nowIso: string): ParseResult | null 
   }
 }
 
-const MAX_ENDED_MEETINGS = 20
 
 /**
  * Keeps at most one ongoing meeting (the one started first; the others are closed), sorts oldest first and

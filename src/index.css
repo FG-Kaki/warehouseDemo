@@ -36,3 +36,22 @@ html, body, #root {
 }
 
 button { font: inherit; color: inherit; }
+
+/* Shown in place of the 3D view if it fails to load; the HUD stays usable on top. */
+.scene-failed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.scene-failed button {
+  border: 1px solid var(--panel-border);
+  background: var(--panel-solid);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}

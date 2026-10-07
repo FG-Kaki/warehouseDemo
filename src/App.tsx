@@ -1,15 +1,25 @@
 // OWNER: architect. Composition root: data source wiring, canvas, HUD, global drag end.
-import { Canvas } from '@react-three/fiber'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { useOffice } from './store'
 import { createMockDataSource } from './data/mock'
 import { createApiDataSource } from './data/api'
-import { OfficeScene } from './scene/OfficeScene'
 import { Hud } from './ui/Hud'
+import { SceneBoundary } from './app/SceneBoundary'
 
 // One source per page load (module scope, so StrictMode's double effects don't create two).
 // `?source=api` talks to the local server (docs/API.md); otherwise the in-browser mock.
 const dataSource = new URLSearchParams(location.search).get('source') === 'api' ? createApiDataSource() : createMockDataSource()
+
+// three.js + the scene are the bulk of the bundle: load them in parallel with the data so the HUD
+// (and the loader) paint first.
+// A retry after a failed chunk load needs a fresh import(), so the lazy component is keyed by attempt.
+const loadScene = () => import('./app/SceneCanvas')
+const sceneByAttempt = new Map<number, ReturnType<typeof lazy<typeof import('./app/SceneCanvas').default>>>()
+const sceneFor = (attempt: number) => {
+  let c = sceneByAttempt.get(attempt)
+  if (!c) sceneByAttempt.set(attempt, (c = lazy(loadScene)))
+  return c
+}
 
 export default function App() {
   useEffect(() => {
@@ -34,9 +44,16 @@ export default function App() {
 
   return (
     <div className="app">
-      <Canvas shadows dpr={[1, 2]} camera={{ position: [13, 22, 30], fov: 35, near: 0.1, far: 300 }}>
-        <OfficeScene />
-      </Canvas>
+      <SceneBoundary>
+        {(attempt) => {
+          const SceneCanvas = sceneFor(attempt)
+          return (
+            <Suspense fallback={null}>
+              <SceneCanvas />
+            </Suspense>
+          )
+        }}
+      </SceneBoundary>
       <Hud />
     </div>
   )

@@ -1,10 +1,9 @@
 // Seed data: a realistic Korean product team, all dates relative to "now".
 import { MEMBER_COLORS } from '../meta'
 import { taskKey, todayIso } from '../selectors'
-import type { Activity, ActivityKind, Estimate, Member, Presence, Priority, Project, Task, TaskStatus } from '../types'
+import type { Activity, ActivityKind, Estimate, Member, Presence, Priority, Project, Task, TaskStatus, Workspace } from '../types'
 import { OFFICE } from '../../office/layout'
-import { refObject, STATUS_TO, taskObject } from './text'
-import type { Persisted } from './storage'
+import { refObject, STATUS_TO, taskObject } from './messages'
 
 const DAY = 86_400_000
 const HOUR = 3_600_000
@@ -140,7 +139,14 @@ const EVENTS: SeedEvent[] = [
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
-export function buildSeed(now: Date): Persisted {
+/** What a fresh office looks like (the mock persists it as-is; the server loads it into SQLite). */
+export interface SeedData {
+  version: 1
+  workspace: Workspace
+  nextNumber: number
+}
+
+export function buildSeed(now: Date): SeedData {
   const t0 = now.getTime()
   const dueDate = (offset: number | null): string | null => {
     if (offset === null) return null

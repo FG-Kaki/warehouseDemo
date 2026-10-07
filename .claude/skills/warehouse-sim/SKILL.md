@@ -23,6 +23,9 @@ store.ts (zustand `useOffice`)  — entities by id + view state + actions
 
 - Components **never** import a DataSource. They call store actions (`createTask`, `updateTask`,
   `assignTask`, `moveTask`, `deleteTask`, `createMember`, `updateMember`, `deleteMember`, …).
+- Domain rules (validation, Korean messages, task/member/meeting state transitions, seed, demo
+  action planning) live once in `src/data/rules/` and are shared by the mock and the server. Never
+  re-implement them in `src/data/mock` or `server/`; change the rule (architect) and both follow.
 - Derived data comes from `src/data/selectors.ts` (`tasksOf`, `backlogTasks`, `workload`,
   `matchesFilters`, `computeKpis`, `deadlineRisk`…). Don't re-implement these.
 - Subscribe to narrow slices: `useOffice(s => s.tasks)`, `useOffice(s => s.selection)`. Use
@@ -39,7 +42,7 @@ store.ts (zustand `useOffice`)  — entities by id + view state + actions
 ## Contract files (architect-owned — import, don't edit)
 
 `docs/PLAN.md`, `docs/API.md`, `src/data/types.ts`, `src/data/DataSource.ts`, `src/data/meta.ts`,
-`src/data/selectors.ts`, `src/data/insights.ts`, `src/office/layout.ts`, `src/theme.ts`, `src/store.ts`, `src/App.tsx`,
+`src/data/selectors.ts`, `src/data/insights.ts`, `src/data/rules/**`, `src/office/layout.ts`, `src/theme.ts`, `src/store.ts`, `src/App.tsx`, `src/app/**`, `scripts/check-bundle.mjs`,
 `src/main.tsx`, `src/index.css`, `vite.config.ts`.
 Need a change? Stop and describe exactly what and why in your report instead of editing.
 
