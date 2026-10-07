@@ -2,7 +2,7 @@
 import { DataError } from '../../src/data/DataSource.ts'
 import { ESTIMATES, PRESENCE_META, PRIORITY_META, STATUSES } from '../../src/data/meta.ts'
 import { deskById } from '../../src/office/layout.ts'
-import type { Id, Presence, Task } from '../../src/data/types.ts'
+import type { AgendaOutcome, Id, Presence, Task } from '../../src/data/types.ts'
 
 export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -10,6 +10,7 @@ export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 
 export interface Lookup {
   hasProject(id: Id): boolean
   hasMember(id: Id): boolean
+  hasTask(id: Id): boolean
   /** Member id sitting at the desk, if any. */
   deskOwner(deskId: string): Id | undefined
 }
@@ -105,4 +106,69 @@ export function checkDesk(deskId: unknown, l: Lookup, selfId?: Id): string {
   const owner = l.deskOwner(deskId)
   if (owner !== undefined && owner !== selfId) throw new DataError('이미 사용 중인 자리예요', 'conflict')
   return deskId
+}
+
+// ---- meetings ---------------------------------------------------------------------
+
+export function checkAgendaFlag(v: unknown): boolean {
+  if (typeof v !== 'boolean') throw new DataError('안건 값이 올바르지 않아요')
+  return v
+}
+
+export function checkMeetingTitle(v: unknown): string {
+  const title = typeof v === 'string' ? v.trim() : ''
+  if (title.length === 0) throw new DataError('회의 이름을 입력해 주세요')
+  if (title.length > 60) throw new DataError('회의 이름은 60자 이하로 입력해 주세요')
+  return title
+}
+
+/** Attendees: at least one, unique, all existing members. */
+export function checkAttendees(v: unknown, l: Lookup): Id[] {
+  if (!Array.isArray(v) || v.length === 0) throw new DataError('참석자를 한 명 이상 골라 주세요')
+  const ids: Id[] = []
+  for (const id of v) {
+    if (typeof id !== 'string' || !l.hasMember(id)) throw new DataError('팀원을 찾을 수 없어요')
+    if (ids.includes(id)) throw new DataError('같은 참석자가 여러 번 들어 있어요')
+    ids.push(id)
+  }
+  return ids
+}
+
+export function checkNotes(v: unknown): string {
+  if (v === undefined) return ''
+  if (typeof v !== 'string') throw new DataError('회의록이 올바르지 않아요')
+  if (v.length > 2000) throw new DataError('회의록은 2000자 이하로 입력해 주세요')
+  return v
+}
+
+/** Outcomes of an ending meeting: on the agenda, at most one per task, well-formed. Returns clean copies. */
+export function checkOutcomes(v: unknown, agenda: Id[], l: Lookup): AgendaOutcome[] {
+  if (v === undefined) return []
+  if (!Array.isArray(v)) throw new DataError('결정 내용이 올바르지 않아요')
+  const seen = new Set<Id>()
+  const clean = v.map((raw): AgendaOutcome | null => {
+    if (!isObj(raw)) throw new DataError('결정 내용이 올바르지 않아요')
+    const taskId = raw.taskId
+    if (typeof taskId !== 'string') throw new DataError('안건에 없는 작업이에요')
+    if (!agenda.includes(taskId)) {
+      if (l.hasTask(taskId)) throw new DataError('안건에 없는 작업이에요')
+      return null // deleted meanwhile: skipped silently
+    }
+    if (seen.has(taskId)) throw new DataError('같은 작업에 결정이 여러 개 있어요')
+    seen.add(taskId)
+    switch (raw.action) {
+      case 'assign':
+        if (typeof raw.memberId !== 'string' || !l.hasMember(raw.memberId)) throw new DataError('팀원을 찾을 수 없어요')
+        return { taskId, action: 'assign', memberId: raw.memberId }
+      case 'status':
+        return { taskId, action: 'status', status: checkStatus(raw.status) }
+      case 'backlog':
+        return { taskId, action: 'backlog' }
+      case 'keep':
+        return { taskId, action: 'keep' }
+      default:
+        throw new DataError('올바르지 않은 결정이에요')
+    }
+  })
+  return clean.filter((o): o is AgendaOutcome => o !== null)
 }

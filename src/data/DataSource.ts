@@ -1,6 +1,6 @@
 // The only door between the app and its data. Owned by the architect.
 // Today: MockDataSource (seed + localStorage + demo mode). Later: ApiDataSource, GitHubDataSource…
-import type { Change, Id, Member, MemberInput, MemberPatch, Reassign, Task, TaskInput, TaskPatch, Workspace } from './types'
+import type { Change, Id, Meeting, MeetingEnd, MeetingStart, Member, MemberInput, MemberPatch, Reassign, Task, TaskInput, TaskPatch, Workspace } from './types'
 
 export interface DataSource {
   /** Human-readable name for the UI, e.g. "로컬 데모 데이터". */
@@ -16,6 +16,17 @@ export interface DataSource {
   updateMember(id: Id, patch: MemberPatch): Promise<Member>
   /** Moves the member's non-done tasks per `reassign`, then removes the member. */
   deleteMember(id: Id, reassign: Reassign): Promise<void>
+
+  /**
+   * Starts the (single) team meeting: captures open onAgenda tasks as the agenda and sets every
+   * attendee's presence to 'meeting'. Rejects with 'conflict' if a meeting is already ongoing.
+   */
+  startMeeting(input: MeetingStart): Promise<Meeting>
+  /**
+   * Ends the ongoing meeting atomically: applies each outcome to its task, clears onAgenda on
+   * agenda tasks (except 'keep'), sets attendees back to 'working', stores notes/outcomes.
+   */
+  endMeeting(id: Id, result: MeetingEnd): Promise<Meeting>
 
   /**
    * Every change (own calls, demo mode, other users/server) is pushed here, plus one

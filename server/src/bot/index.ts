@@ -121,9 +121,10 @@ export function createBot(opts: BotOptions): Bot {
     if (due.length === 0) return
     const ws = await getWorkspace()
     if (!ws) return // server unreachable: try again on the next timer
+    const inMeeting = attendeesOf(ws)
     for (const [id, p] of due) {
       const m = ws.members.find((x) => x.id === id)
-      if (!m || m.presence !== p.presence) {
+      if (!m || m.presence !== p.presence || inMeeting.has(id)) {
         plans.delete(id)
         continue
       }
@@ -133,14 +134,19 @@ export function createBot(opts: BotOptions): Bot {
     }
   }
 
+  /** Members sitting in an ongoing (manager-run) meeting: the bot must not touch their presence. */
+  const attendeesOf = (ws: Workspace) => new Set(ws.meetings.filter((m) => m.status === 'ongoing').flatMap((m) => m.attendeeIds))
+
   /** Members away / in a meeting / on a break with no plan get one, so nobody stays stuck. */
   function reconcile(ws: Workspace, defaults: boolean) {
+    const inMeeting = attendeesOf(ws)
     for (const [id, p] of [...plans]) {
       const m = ws.members.find((x) => x.id === id)
-      if (!m || m.presence !== p.presence) plans.delete(id)
+      if (!m || m.presence !== p.presence || inMeeting.has(id)) plans.delete(id)
     }
     for (const m of ws.members) {
-      if (m.presence === 'working' || plans.has(m.id)) continue
+      // Attendees of the manager's meeting come back when the manager ends it, never by the bot.
+      if (m.presence === 'working' || plans.has(m.id) || inMeeting.has(m.id)) continue
       if (defaults) plan(m.id, m.presence, [8, 15])
       else if (m.presence === 'meeting') plan(m.id, 'meeting', [20, 40])
       else if (m.presence === 'break') plan(m.id, 'break', [15, 30])
@@ -170,13 +176,15 @@ export function createBot(opts: BotOptions): Bot {
     const routineQuiet = () => random() >= ROUTINE_FEED_CHANCE
     const candidates: Candidate[] = []
     const weightOf = (t: Task) => PRIORITY_META[t.priority].weight
+    // The agenda belongs to the team lead: open onAgenda tasks are never taken, started, moved or completed.
+    const free = ws.tasks.filter((t) => !t.onAgenda)
 
     // todo -> in_progress: a working member with nothing in progress starts their best todo.
     const starters = working
       .filter((m) => !ws.tasks.some((t) => t.assigneeId === m.id && t.status === 'in_progress'))
       .map((m) => ({
         m,
-        task: ws.tasks
+        task: free
           .filter((t) => t.assigneeId === m.id && t.status === 'todo')
           .sort((a, b) => weightOf(b) - weightOf(a) || (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999') || a.order - b.order)[0],
       }))
@@ -193,7 +201,7 @@ export function createBot(opts: BotOptions): Bot {
     }
 
     // in_progress -> review
-    const inProgress = ws.tasks.filter((t) => t.status === 'in_progress' && working.some((m) => m.id === t.assigneeId))
+    const inProgress = free.filter((t) => t.status === 'in_progress' && working.some((m) => m.id === t.assigneeId))
     if (inProgress.length > 0) {
       candidates.push({
         name: 'review',
@@ -206,7 +214,7 @@ export function createBot(opts: BotOptions): Bot {
     }
 
     // review -> done: someone (preferably another member) finishes the review.
-    const inReview = ws.tasks.filter((t) => t.status === 'review')
+    const inReview = free.filter((t) => t.status === 'review')
     if (inReview.length > 0 && working.length > 0) {
       candidates.push({
         name: 'done',
@@ -222,7 +230,7 @@ export function createBot(opts: BotOptions): Bot {
 
     // backlog -> a light member takes the most important unassigned task.
     const record: Record<Id, Task> = Object.fromEntries(ws.tasks.map((t) => [t.id, t]))
-    const backlog = backlogTasks(record)
+    const backlog = backlogTasks(Object.fromEntries(free.map((t) => [t.id, t])))
     const light = working.map((m) => ({ m, w: workload(m, record) })).filter((x) => x.w < 0.8)
     if (backlog.length > 0 && light.length > 0) {
       candidates.push({
@@ -243,7 +251,9 @@ export function createBot(opts: BotOptions): Bot {
     // presence
     const room = Math.floor(members.length / 2) - (members.length - working.length)
     const meetingRunning = [...plans.values()].some((p) => p.presence === 'meeting')
-    if (!meetingRunning && room >= 2 &&working.length >= 3) {
+    // No informal meeting while a real one is ongoing (the meeting room is taken).
+    const realMeeting = ws.meetings.some((m) => m.status === 'ongoing')
+    if (!meetingRunning && !realMeeting && room >= 2 && working.length >= 3) {
       candidates.push({
         name: 'meeting',
         weight: 3,

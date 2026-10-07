@@ -1,7 +1,8 @@
 // Shared hooks for the HUD. OWNER: ui-builder.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Id, Member, Task } from '../data/types'
-import { matchesFilters, todayIso, workload, workloadLevel, tasksOf, openPoints } from '../data/selectors'
+import { PRIORITY_META } from '../data/meta'
+import { isOpen, matchesFilters, todayIso, workload, workloadLevel, tasksOf, openPoints } from '../data/selectors'
 import { useOffice } from '../store'
 
 /** Re-renders every `ms` so relative times stay fresh. Returns Date.now(). */
@@ -91,4 +92,16 @@ export function useTaskDrag(taskId: Id) {
     return true
   }, [])
   return { onPointerDown, consumeClick }
+}
+
+/** Open tasks on the agenda, in the order a meeting uses them (priority desc, then number). */
+export function agendaOrder(tasks: Record<Id, Task>): Task[] {
+  return Object.values(tasks)
+    .filter((t) => t.onAgenda === true && isOpen(t))
+    .sort((a, b) => PRIORITY_META[b.priority].weight - PRIORITY_META[a.priority].weight || a.number - b.number)
+}
+
+export function useAgendaTasks(): Task[] {
+  const tasks = useOffice((s) => s.tasks)
+  return useMemo(() => agendaOrder(tasks), [tasks])
 }

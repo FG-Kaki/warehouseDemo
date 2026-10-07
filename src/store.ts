@@ -3,7 +3,7 @@
 // (optimistic update → DataSource call → reconcile / roll back with a toast).
 import { create } from 'zustand'
 import { DataError, type DataSource } from './data/DataSource'
-import type { Activity, Change, ConnectionStatus, Id, Member, MemberInput, MemberPatch, Project, Reassign, Task, TaskInput, TaskPatch, TaskStatus, Workspace } from './data/types'
+import type { Activity, Change, ConnectionStatus, Id, Meeting, MeetingEnd, MeetingStart, Member, MemberInput, MemberPatch, Project, Reassign, Task, TaskInput, TaskPatch, TaskStatus, Workspace } from './data/types'
 import { EMPTY_FILTERS, type Filters } from './data/selectors'
 
 export type Selection = { kind: 'task'; id: Id } | { kind: 'member'; id: Id }
@@ -16,9 +16,21 @@ export type Dialog =
   | { kind: 'removeMember'; memberId: Id }
   | { kind: 'deleteTask'; taskId: Id }
   | { kind: 'confirmReset' }
+  | { kind: 'startMeeting' }
+  | { kind: 'endMeeting'; meetingId: Id }
 
 /** Where a dragged task would land if released now. Set by whoever is under the pointer. */
-export type DropTarget = { kind: 'member'; id: Id } | { kind: 'backlog' } | { kind: 'status'; status: TaskStatus }
+export type DropTarget =
+  | { kind: 'member'; id: Id }
+  | { kind: 'backlog' }
+  | { kind: 'status'; status: TaskStatus }
+  /** The meeting-room table: put the task on the next meeting's agenda. */
+  | { kind: 'agenda' }
+  /**
+   * A day cell in the weekly plan: set the due date. memberId: undefined = keep the assignee,
+   * an id = assign to them, null = unassign (the "미배정" row).
+   */
+  | { kind: 'day'; date: string; memberId?: Id | null }
 
 export interface Toast {
   id: number
@@ -37,6 +49,8 @@ interface OfficeState {
   projects: Record<Id, Project>
   members: Record<Id, Member>
   tasks: Record<Id, Task>
+  /** Ongoing meeting (if any) + recent ended ones. Use ongoingMeeting() to find the live one. */
+  meetings: Record<Id, Meeting>
   /** Newest last, capped at 100. */
   activity: Activity[]
 
@@ -96,6 +110,16 @@ interface OfficeState {
   deleteMember: (id: Id, reassign: Reassign) => Promise<boolean>
   /** Only available when canReset. */
   resetData: () => Promise<boolean>
+  /** Put a task on / take it off the next meeting's agenda. */
+  setAgenda: (taskId: Id, on: boolean) => Promise<boolean>
+  startMeeting: (input: MeetingStart) => Promise<Meeting | null>
+  endMeeting: (id: Id, result: MeetingEnd) => Promise<boolean>
+}
+
+/** The meeting currently in progress, if any. */
+export function ongoingMeeting(meetings: Record<Id, Meeting>): Meeting | null {
+  for (const m of Object.values(meetings)) if (m.status === 'ongoing') return m
+  return null
 }
 
 let source: DataSource | null = null
@@ -116,6 +140,14 @@ const writePref = (k: string, v: string) => {
   } catch {
     // Private mode / blocked storage: the preference just isn't remembered.
   }
+}
+
+/** Patch that moves a task to the top of `memberId`'s stack (or the backlog shelf for null). */
+function assignPatch(tasks: Record<Id, Task>, t: Task, memberId: Id | null): TaskPatch {
+  const top = Math.max(0, ...Object.values(tasks).filter((x) => x.assigneeId === memberId).map((x) => x.order)) + 1
+  const patch: TaskPatch = { assigneeId: memberId, order: top }
+  if (memberId === null && (t.status === 'in_progress' || t.status === 'review')) patch.status = 'todo'
+  return patch
 }
 
 const byId = <T extends { id: Id }>(list: T[]) => Object.fromEntries(list.map((x) => [x.id, x])) as Record<Id, T>
@@ -153,6 +185,9 @@ export const useOffice = create<OfficeState>((set, get) => {
       case 'project_upsert':
         set({ projects: { ...s.projects, [c.project.id]: c.project } })
         break
+      case 'meeting_upsert':
+        set({ meetings: { ...s.meetings, [c.meeting.id]: c.meeting } })
+        break
       case 'activity':
         if (!s.activity.some((a) => a.id === c.activity.id)) set({ activity: [...s.activity, c.activity].slice(-100) })
         break
@@ -178,6 +213,7 @@ export const useOffice = create<OfficeState>((set, get) => {
       projects: byId(ws.projects),
       members,
       tasks,
+      meetings: byId(ws.meetings ?? []),
       activity: ws.activity.slice(-100),
       selection: alive(s.selection),
       hover: alive(s.hover),
@@ -194,6 +230,7 @@ export const useOffice = create<OfficeState>((set, get) => {
     projects: {},
     members: {},
     tasks: {},
+    meetings: {},
     activity: [],
 
     selection: null,
@@ -251,9 +288,34 @@ export const useOffice = create<OfficeState>((set, get) => {
       const { drag, dropTarget } = get()
       set({ drag: null, dropTarget: null })
       if (!drag || !dropTarget) return
-      if (dropTarget.kind === 'member') void get().assignTask(drag.taskId, dropTarget.id)
-      else if (dropTarget.kind === 'backlog') void get().assignTask(drag.taskId, null)
-      else void get().moveTask(drag.taskId, dropTarget.status)
+      const { tasks } = get()
+      const t = tasks[drag.taskId]
+      if (!t) return
+      // One drop = one request. A box dragged off the meeting table (3D) to a person or the shelf
+      // also leaves the agenda; reassigning from the panel keeps it on the agenda.
+      const offTable: TaskPatch = drag.from === 'scene' && t.onAgenda ? { onAgenda: false } : {}
+      switch (dropTarget.kind) {
+        case 'member':
+          if (t.assigneeId !== dropTarget.id) void get().updateTask(t.id, { ...assignPatch(tasks, t, dropTarget.id), ...offTable })
+          else if (offTable.onAgenda === false) void get().updateTask(t.id, offTable)
+          break
+        case 'backlog':
+          if (t.assigneeId !== null) void get().updateTask(t.id, { ...assignPatch(tasks, t, null), ...offTable })
+          else if (offTable.onAgenda === false) void get().updateTask(t.id, offTable)
+          break
+        case 'status':
+          void get().moveTask(drag.taskId, dropTarget.status)
+          break
+        case 'agenda':
+          void get().setAgenda(drag.taskId, true)
+          break
+        case 'day': {
+          const reassign = dropTarget.memberId !== undefined && t.assigneeId !== dropTarget.memberId
+          const patch: TaskPatch = { ...(reassign ? assignPatch(tasks, t, dropTarget.memberId ?? null) : {}), dueDate: dropTarget.date }
+          if (patch.dueDate !== t.dueDate || reassign) void get().updateTask(t.id, patch)
+          break
+        }
+      }
     },
     cancelDrag: () => set({ drag: null, dropTarget: null }),
 
@@ -293,6 +355,7 @@ export const useOffice = create<OfficeState>((set, get) => {
           projects: byId(ws.projects),
           members: byId(ws.members),
           tasks: byId(ws.tasks),
+          meetings: byId(ws.meetings ?? []),
           activity: ws.activity.slice(-100),
         })
         unsubscribe = src.subscribe(apply)
@@ -373,10 +436,7 @@ export const useOffice = create<OfficeState>((set, get) => {
       const t = tasks[taskId]
       if (!t) return false
       if (t.assigneeId === memberId) return true
-      const top = Math.max(0, ...Object.values(tasks).filter((x) => x.assigneeId === memberId).map((x) => x.order)) + 1
-      const patch: TaskPatch = { assigneeId: memberId, order: top }
-      if (memberId === null && (t.status === 'in_progress' || t.status === 'review')) patch.status = 'todo'
-      return get().updateTask(taskId, patch)
+      return get().updateTask(taskId, assignPatch(tasks, t, memberId))
     },
 
     moveTask: async (taskId, status) => {
@@ -439,6 +499,38 @@ export const useOffice = create<OfficeState>((set, get) => {
           drag: null,
           dropTarget: null,
         })
+        return true
+      } catch (e) {
+        fail(e)
+        return false
+      }
+    },
+
+    setAgenda: async (taskId, on) => {
+      const t = get().tasks[taskId]
+      if (!t) return false
+      if (t.onAgenda === on) return true
+      return get().updateTask(taskId, { onAgenda: on })
+    },
+
+    startMeeting: async (input) => {
+      if (!source) return null
+      try {
+        // Not optimistic: the source flips attendee presence and pushes those changes.
+        const meeting = await source.startMeeting(input)
+        apply({ type: 'meeting_upsert', meeting })
+        return meeting
+      } catch (e) {
+        fail(e)
+        return null
+      }
+    },
+
+    endMeeting: async (id, result) => {
+      if (!source) return false
+      try {
+        const meeting = await source.endMeeting(id, result)
+        apply({ type: 'meeting_upsert', meeting })
         return true
       } catch (e) {
         fail(e)

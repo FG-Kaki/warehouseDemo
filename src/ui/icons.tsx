@@ -73,6 +73,14 @@ const PATHS = {
   inbox: <path d="M4 13l2.5-7h11L20 13M4 13v6h16v-6M4 13h5l1 2h4l1-2h5" />,
   pulse: <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />,
   filter: <path d="M4 5h16l-6 8v6l-4-2v-4L4 5z" />,
+  meeting: <path d="M4 5h16v11h-9l-4 4v-4H4V5z" />,
+  flag: <path d="M5 21V4M5 4h11l-2 4 2 4H5" />,
+  history: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v4l3 2" />
+    </>
+  ),
   spark: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" />,
 } satisfies Record<string, ReactNode>
 

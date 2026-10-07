@@ -99,6 +99,14 @@ export function createMockDataSourceForTest(opts: MockOptions = {}): MockHandle 
       await wait()
       engine.deleteMember(id, reassign)
     },
+    async startMeeting(input) {
+      await wait()
+      return engine.startMeeting(input)
+    },
+    async endMeeting(id, result) {
+      await wait()
+      return engine.endMeeting(id, result)
+    },
     subscribe: (listener) => engine.subscribe(listener),
     // reason 'pause' (dialog / drag) is handled by the leader grace period; 'user' flips the wish
     setDemoMode(on, _reason) {

@@ -58,6 +58,46 @@ Unknown routes → `404 not_found`. Check order: bad actor (400) → missing id 
 - Deleting a member moves their open tasks per `reassign` (`backlog`: assignee null and
   in_progress/review → todo; `member`: to that member, must exist and differ) and sets
   `assigneeId = null` on their done tasks. Emits `task_upsert` for every moved task, then `member_delete`.
+- Tasks have `onAgenda: boolean` (default false; missing in old data → false). Setting it true on a
+  done task → `400` "완료된 작업은 안건으로 올릴 수 없어요". Completing a task clears it.
+- Meetings (one meeting room → at most one `ongoing`):
+  - start: `title` trimmed 1–60 chars ("회의 이름을 입력해 주세요"); `attendeeIds` ≥ 1, unique, existing
+    ("참석자를 한 명 이상 골라 주세요" / unknown → `400`); another ongoing → `409` "이미 회의가 진행 중이에요".
+    Captures open `onAgenda` tasks (ordered by priority weight desc, then number) as `agendaTaskIds`,
+    sets each attendee's presence to `meeting`. Emits `member_upsert`×N, `meeting_upsert`, one
+    `meeting_started` activity ("{title}을 시작했어요 · 참석 N명 · 안건 M건").
+  - end: meeting must exist (`404`) and be ongoing (`409` "이미 끝난 회의예요"); `notes` ≤ 2000 chars;
+    each outcome's `taskId` must be on that meeting's agenda and appear at most once; `assign`
+    member must exist; `status` from the enum. Applies outcomes (`assign` → assignee + top of stack;
+    `status` → status (done sets completedAt); `backlog` → assignee null, in_progress/review → todo;
+    `keep` → nothing), clears `onAgenda` on every agenda task except `keep` ones and tasks deleted
+    meanwhile (skipped silently), sets attendees still present back to `working`. One transaction.
+    Emits `task_upsert`s, `member_upsert`s, `meeting_upsert`, one `meeting_ended` activity
+    ("{title}이 끝났어요 · 결정 K건").
+  - Clarifications (2026-10-07):
+    - Start: validation (400) runs before the "already ongoing" 409. Emits `member_upsert` for every attendee.
+    - End: only attendees whose presence is still `meeting` go back to `working` (someone the manager
+      sent on a break stays there); `member_upsert` only for those that changed.
+    - End: an outcome whose task **no longer exists** is skipped silently; an outcome for an existing
+      task that is not on this meeting's agenda → `400` "안건에 없는 작업이에요".
+    - `assign` moves the task to the top of the new stack only when the assignee actually changes.
+    - "결정 K건" counts outcomes other than `keep`. Josa via `eul`/`iGa` from `src/data/mock/text.ts`.
+    - Outcomes apply to the task as it is at end time, including a task completed during the meeting
+      (a `status` outcome can reopen it). Outcomes whose task was deleted are dropped from
+      `meeting.outcomes` and from the "결정 K건" count. An outcome that changes nothing (e.g. backlog
+      for an already-unassigned todo) writes nothing, emits nothing, and does not bump `updatedAt`.
+    - Demo/bot treat open `onAgenda` tasks as not free: they never take, start, move or complete them
+      (the agenda belongs to the team lead).
+    - Other messages: duplicate attendee "같은 참석자가 여러 번 들어 있어요"; duplicate outcome
+      "같은 작업에 결정이 여러 개 있어요"; notes > 2000 "회의록은 2000자 이하로 입력해 주세요"; title > 60
+      "회의 이름은 60자 이하로 입력해 주세요"; bad action "올바르지 않은 결정이에요"; non-boolean onAgenda
+      "안건 값이 올바르지 않아요"; unknown meeting "회의를 찾을 수 없어요"; bot changing an attendee's
+      presence during a meeting → 409 "회의 중인 팀원이라 지금은 바꿀 수 없어요".
+  - Deleting a member removes them from an ongoing meeting's `attendeeIds`; deleting a task removes
+    it from an ongoing meeting's `agendaTaskIds` (emit `meeting_upsert`).
+  - While a meeting is ongoing, demo (bot / mock demo) must not change attendees' presence
+    (`409` for the bot) and must not start an informal "meeting" of its own.
+  - Workspace `meetings`: the ongoing one + the 20 most recent ended, newest last.
 - Manager touch: any manager mutation of a task or member (any field) records a touch time. Bot (`X-Actor`)
   mutations of an entity touched by the manager in the last 120 s → `409 conflict`.
 
@@ -75,7 +115,9 @@ Unknown routes → `404 not_found`. Check order: bad actor (400) → missing id 
 | DELETE | `/api/members/:id?reassign=backlog` or `?reassignTo=<memberId>` | – | `204` |
 | GET | `/api/demo` | – | `{ on: boolean }` |
 | PUT | `/api/demo` | `{ on: boolean }` | `{ on: boolean }` — persisted in `meta`, restored on boot, broadcast as a `demo` change |
-| POST | `/api/reset` | – | `Workspace` (reseeds; all clients get `snapshot`) |
+| POST | `/api/meetings` | `MeetingStart` | `201 Meeting` |
+| POST | `/api/meetings/:id/end` | `MeetingEnd` | `200 Meeting` |
+| POST | `/api/reset` | `{}` | `Workspace` (reseeds; all clients get `snapshot`) |
 | GET | `/api/events` | – | Server-Sent Events stream (below) |
 
 Unknown fields in bodies are ignored. PATCH applies only the given fields.

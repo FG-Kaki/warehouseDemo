@@ -1,7 +1,7 @@
 // localStorage persistence for the mock source. Loading repairs what it can field by field and
 // only gives up (→ reseed, with a backup of the raw string) when the structure is unusable.
 import { ESTIMATES, PRESENCE_META, PRIORITY_META, STATUS_META } from '../meta'
-import type { Activity, Member, Project, Task, Workspace } from '../types'
+import type { Activity, AgendaOutcome, Meeting, Member, Project, Task, Workspace } from '../types'
 import { MAX_MEMBERS, OFFICE, deskById } from '../../office/layout'
 
 export interface StorageLike {
@@ -210,6 +210,10 @@ export function parsePersisted(raw: string, nowIso: string): ParseResult | null 
     const completedAt = status === 'done' ? (isStr(t.completedAt) ? t.completedAt : updatedAt) : null
     if (!statusOk || !priorityOk || !estimateOk || !dueOk || !assigneeOk || !isStr(t.description) || !isNum(t.order) || !isStr(t.createdAt) || !isStr(t.updatedAt)) fix()
     if ((t.status === 'done') !== isStr(t.completedAt)) fix()
+    // Old data has no onAgenda: that is not damage. Anything else wrong with it is repaired (and reported).
+    if (t.onAgenda !== undefined && typeof t.onAgenda !== 'boolean') fix()
+    const onAgenda = t.onAgenda === true && status !== 'done'
+    if (t.onAgenda === true && status === 'done') fix()
     const task: Task = {
       id: t.id,
       number: isNum(t.number) && Number.isInteger(t.number) && t.number > 0 ? t.number : -1,
@@ -225,6 +229,7 @@ export function parsePersisted(raw: string, nowIso: string): ParseResult | null 
       createdAt,
       updatedAt,
       completedAt,
+      onAgenda,
     }
     taskIds.add(task.id)
     if (task.number < 0 || numbers.has(task.number)) {
@@ -260,8 +265,109 @@ export function parsePersisted(raw: string, nowIso: string): ParseResult | null 
     outActivity.splice(0, outActivity.length - 100)
   }
 
+  // meetings (optional: data saved before meetings existed has none)
+  const outMeetings: Meeting[] = []
+  if (data.workspace.meetings !== undefined && !Array.isArray(data.workspace.meetings)) fix()
+  if (Array.isArray(data.workspace.meetings)) {
+    const meetingIds = new Set<string>()
+    for (const raw of data.workspace.meetings) {
+      const meeting = parseMeeting(raw, keptMemberIds, taskIds, nowIso)
+      if (!meeting || meetingIds.has(meeting.meeting.id)) {
+        fix()
+        continue
+      }
+      if (meeting.repaired) fix()
+      meetingIds.add(meeting.meeting.id)
+      outMeetings.push(meeting.meeting)
+    }
+  }
+  if (normalizeMeetings(outMeetings, nowIso)) fix()
+
   return {
-    state: { version: 1, workspace: { projects: outProjects, members: outMembers, tasks: outTasks, activity: outActivity }, nextNumber },
+    state: { version: 1, workspace: { projects: outProjects, members: outMembers, tasks: outTasks, meetings: outMeetings, activity: outActivity }, nextNumber },
+    repaired,
+  }
+}
+
+const MAX_ENDED_MEETINGS = 20
+
+/**
+ * Keeps at most one ongoing meeting (the one started first; the others are closed), sorts oldest first and
+ * trims the ended ones to the most recent MAX_ENDED_MEETINGS. Returns true when it had to change anything.
+ */
+export function normalizeMeetings(meetings: Meeting[], nowIso: string): boolean {
+  let changed = false
+  const ongoing = meetings.filter((m) => m.status === 'ongoing').sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  for (const extra of ongoing.slice(1)) {
+    extra.status = 'ended'
+    extra.endedAt = nowIso
+    changed = true
+  }
+  const sorted = [...meetings].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  const ended = sorted.filter((m) => m.status === 'ended')
+  const drop = new Set(ended.slice(0, Math.max(0, ended.length - MAX_ENDED_MEETINGS)))
+  const kept = sorted.filter((m) => !drop.has(m))
+  if (drop.size > 0) changed = true
+  if (changed || kept.some((m, i) => m !== meetings[i])) {
+    meetings.splice(0, meetings.length, ...kept)
+  }
+  return changed
+}
+
+function parseOutcome(o: unknown): AgendaOutcome | null {
+  if (!isObj(o) || !isStr(o.taskId)) return null
+  if (o.action === 'keep' || o.action === 'backlog') return { taskId: o.taskId, action: o.action }
+  if (o.action === 'assign' && isStr(o.memberId)) return { taskId: o.taskId, action: 'assign', memberId: o.memberId }
+  if (o.action === 'status' && isStr(o.status) && o.status in STATUS_META) return { taskId: o.taskId, action: 'status', status: o.status as Task['status'] }
+  return null
+}
+
+function parseMeeting(m: unknown, memberIds: Set<string>, taskIds: Set<string>, nowIso: string): { meeting: Meeting; repaired: boolean } | null {
+  if (!isObj(m) || !isStr(m.id) || !isStr(m.title) || !isStr(m.startedAt)) return null
+  if (m.status !== 'ongoing' && m.status !== 'ended') return null
+  let repaired = false
+  const strings = (v: unknown): string[] => {
+    if (!Array.isArray(v)) {
+      repaired = true
+      return []
+    }
+    const out = v.filter(isStr)
+    if (out.length !== v.length) repaired = true
+    return [...new Set(out)]
+  }
+  let attendeeIds = strings(m.attendeeIds)
+  let agendaTaskIds = strings(m.agendaTaskIds)
+  if (m.status === 'ongoing') {
+    // an ongoing meeting only refers to people / tasks that still exist (history keeps whatever it had)
+    const a = attendeeIds.filter((id) => memberIds.has(id))
+    const t = agendaTaskIds.filter((id) => taskIds.has(id))
+    if (a.length !== attendeeIds.length || t.length !== agendaTaskIds.length) repaired = true
+    attendeeIds = a
+    agendaTaskIds = t
+  }
+  const outcomes: AgendaOutcome[] = []
+  if (Array.isArray(m.outcomes)) {
+    for (const raw of m.outcomes) {
+      const o = parseOutcome(raw)
+      if (o) outcomes.push(o)
+      else repaired = true
+    }
+  } else repaired = true
+  if (!isStr(m.notes)) repaired = true
+  const ended = m.status === 'ended'
+  if (ended && !isStr(m.endedAt)) repaired = true
+  return {
+    meeting: {
+      id: m.id,
+      title: m.title,
+      attendeeIds,
+      agendaTaskIds,
+      status: m.status,
+      startedAt: m.startedAt,
+      endedAt: ended ? (isStr(m.endedAt) ? m.endedAt : nowIso) : null,
+      notes: isStr(m.notes) ? m.notes : '',
+      outcomes,
+    },
     repaired,
   }
 }

@@ -98,7 +98,8 @@ export function createDemo(engine: MockEngine, { random, now, leader, autoRun }:
   const pick = <T>(list: T[]): T => list[Math.min(list.length - 1, Math.floor(random() * list.length))]
   const between = (min: number, max: number) => min + random() * (max - min)
   const refOf = (t: Task) => taskKey(t, engine.ws.projects.find((p) => p.id === t.projectId)?.key)
-  const taskFree = (t: Task) => !engine.touchedRecently('task', t.id)
+  // open agenda tasks belong to the team lead: demo never takes, starts, moves or completes them
+  const taskFree = (t: Task) => !t.onAgenda && !engine.touchedRecently('task', t.id)
   const memberFree = (m: Member) => !engine.touchedRecently('member', m.id)
   /** Only some routine moves are worth a feed row. */
   const routine = (message: string) => (random() < ROUTINE_FEED_CHANCE ? message : null)
@@ -180,13 +181,20 @@ export function createDemo(engine: MockEngine, { random, now, leader, autoRun }:
     armReturnTimer()
   }
 
+  /** Attendees of a meeting the manager started belong to it until the manager ends it. */
+  function inMeeting(): Set<Id> {
+    const meeting = engine.ws.meetings.find((m) => m.status === 'ongoing')
+    return new Set(meeting ? meeting.attendeeIds : [])
+  }
+
   function processReturns(adoptManagerSet: boolean) {
     const ws = engine.ws
     const t = now().getTime()
+    const busy = inMeeting()
     if (adoptManagerSet) {
       // Members in a meeting / on a break without a plan (seed, manager) get one, unless the manager just set them.
       for (const m of ws.members) {
-        if (engine.getPlans().has(m.id) || !memberFree(m)) continue
+        if (busy.has(m.id) || engine.getPlans().has(m.id) || !memberFree(m)) continue
         if (m.presence === 'meeting') scheduleReturn(m.id, 'meeting', [20, 40])
         else if (m.presence === 'break') scheduleReturn(m.id, 'break', [15, 30])
       }
@@ -194,6 +202,10 @@ export function createDemo(engine: MockEngine, { random, now, leader, autoRun }:
     const due: Id[] = []
     for (const [id, r] of [...engine.getPlans()]) {
       const m = ws.members.find((x) => x.id === id)
+      if (m && busy.has(id)) {
+        engine.setPlan(id, null)
+        continue
+      }
       if (!m || m.presence !== r.presence) {
         engine.setPlan(id, null)
         continue
@@ -212,8 +224,9 @@ export function createDemo(engine: MockEngine, { random, now, leader, autoRun }:
    */
   function adopt(bookDefaults = true) {
     if (bookDefaults) {
+      const busy = inMeeting()
       for (const m of engine.ws.members) {
-        if (m.presence === 'working' || engine.getPlans().has(m.id) || !memberFree(m)) continue
+        if (m.presence === 'working' || busy.has(m.id) || engine.getPlans().has(m.id) || !memberFree(m)) continue
         scheduleReturn(m.id, m.presence, [8, 15])
       }
     }
@@ -335,7 +348,7 @@ export function createDemo(engine: MockEngine, { random, now, leader, autoRun }:
 
     // presence (never for members the manager just touched)
     const room = Math.floor(members.length / 2) - (members.length - working.length)
-    const meetingRunning = [...engine.getPlans().values()].some((r) => r.presence === 'meeting')
+    const meetingRunning = [...engine.getPlans().values()].some((r) => r.presence === 'meeting') || engine.ws.meetings.some((m) => m.status === 'ongoing')
     if (!meetingRunning && room >= 2 && movable.length >= 3) {
       candidates.push({
         name: 'meeting',

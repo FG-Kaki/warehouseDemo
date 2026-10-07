@@ -1,7 +1,7 @@
 // Shared geometries, cached materials and tiny building-block components.
 import { Html } from '@react-three/drei'
 import { useThree } from '@react-three/fiber'
-import { useLayoutEffect, useRef, type ComponentProps, type ReactNode, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from 'react'
 import { BoxGeometry, Color, CylinderGeometry, MeshStandardMaterial, SphereGeometry, type Group as ThreeGroup, type Mesh, type Object3D } from 'three'
 import { DYN_LAYER, noRaycast } from './runtime'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
@@ -113,7 +113,14 @@ export function NoPick({ children }: { children: ReactNode }) {
  */
 export function SceneHtml(props: ComponentProps<typeof Html>) {
   const connected = useThree((s) => !!s.events.connected)
-  if (!connected) return null
+  // Mount one animation frame after the event system connects, never inside the commit that connected it.
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    if (!connected) return
+    const id = requestAnimationFrame(() => setReady(true))
+    return () => cancelAnimationFrame(id)
+  }, [connected])
+  if (!connected || !ready) return null
   return <Html {...props} />
 }
 

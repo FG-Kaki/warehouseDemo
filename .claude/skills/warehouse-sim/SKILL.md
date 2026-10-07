@@ -103,6 +103,15 @@ Code, identifiers and comments are English.
 Strict project settings: `verbatimModuleSyntax` (use `import type`), `erasableSyntaxOnly` (no
 `enum`, no parameter properties, no namespaces), `noUnusedLocals/Parameters`.
 
+## Processes and the user's machine
+
+This runs on the user's own computer. Only stop processes **you started in this task**, by their
+PID. Never kill by name or wildcard (`Stop-Process -Name chrome`, `taskkill /IM node.exe`,
+`pkill node`, …) — that closes the user's own browser windows and other apps. Leave dev servers you
+didn't start running. For browser checks prefer the in-app browser tools; if you launch a headless
+browser yourself, use a dedicated `--user-data-dir` under your scratch/temp dir and close only that
+instance.
+
 ## Definition of done
 
 1. `npx tsc -b` passes (from the project root).

@@ -56,6 +56,19 @@ function checkInvariants(ws: Workspace, label: string) {
   }
   assert(ws.activity.length <= 100, `${label}: activity capped`)
   assert(new Set(ws.activity.map((a) => a.id)).size === ws.activity.length, `${label}: unique activity ids`)
+  // agenda + meetings: at most one ongoing meeting; its agenda / attendees exist; done tasks are never on the agenda
+  const taskIds = new Set(ws.tasks.map((t) => t.id))
+  for (const t of ws.tasks) assert(typeof t.onAgenda === 'boolean' && !(t.onAgenda && t.status === 'done'), `${label}: onAgenda is a boolean on open tasks only (${t.id})`)
+  const ongoing = ws.meetings.filter((m) => m.status === 'ongoing')
+  assert(ongoing.length <= 1, `${label}: at most one ongoing meeting`)
+  assert(ws.meetings.filter((m) => m.status === 'ended').length <= 20, `${label}: at most 20 ended meetings`)
+  assert(new Set(ws.meetings.map((m) => m.id)).size === ws.meetings.length, `${label}: unique meeting ids`)
+  for (const m of ongoing) {
+    assert(m.agendaTaskIds.every((id) => taskIds.has(id)), `${label}: every agenda task id exists`)
+    assert(m.attendeeIds.every((id) => memberIds.has(id)), `${label}: every attendee exists`)
+    assert(m.endedAt === null, `${label}: ongoing meeting has no endedAt`)
+  }
+  for (const m of ws.meetings.filter((x) => x.status === 'ended')) assert(m.endedAt !== null, `${label}: ended meeting has endedAt`)
 }
 
 function open(
@@ -831,6 +844,57 @@ async function main() {
     const before = await first.source.load()
     assert(JSON.stringify(ws.tasks) === JSON.stringify(before.tasks), 'reload equals state before')
     console.log('demo persistence ok')
+  }
+
+  // ---- meetings alongside demo mode + cross-tab races ---------------------------
+  {
+    let clock = Date.now()
+    const hub = createSharedMemoryStorage()
+    const a = open({ storage: hub.view(), seed: 11, now: () => new Date(clock) })
+    const ws0 = await a.source.load()
+    const people = ws0.members.slice(0, 3).map((m) => m.id)
+    const meeting = await a.source.startMeeting({ title: '스모크 회의', attendeeIds: people })
+    for (let i = 0; i < 120; i++) {
+      clock += 10_000
+      a.handle.returnTick()
+      a.handle.demoTick()
+      // the demo keeps working around the meeting; tasks get completed meanwhile
+      const w = await a.source.load()
+      if (i % 10 === 0) checkInvariants(w, `demo during meeting ${i}`)
+      assert(w.members.filter((m) => people.includes(m.id)).every((m) => m.presence === 'meeting'), `attendees stay in the meeting (${i})`)
+    }
+    // delete an agenda task and an attendee while it runs
+    const mid = await a.source.load()
+    const agendaTask = mid.meetings[0].agendaTaskIds[0]
+    assert(agendaTask !== undefined, 'the seed agenda was captured')
+    await a.source.deleteTask(agendaTask)
+    await a.source.deleteMember(people[1], { mode: 'backlog' })
+    const afterDeletes = await a.source.load()
+    checkInvariants(afterDeletes, 'deleted during meeting')
+    assert(!afterDeletes.meetings[0].attendeeIds.includes(people[1]), 'removed member left the meeting')
+    assert(!afterDeletes.meetings[0].agendaTaskIds.includes(agendaTask), 'deleted task left the agenda')
+    await a.source.endMeeting(meeting.id, { notes: '', outcomes: [] })
+    const ended = await a.source.load()
+    checkInvariants(ended, 'meeting ended')
+    assert(ended.meetings.every((m) => m.status === 'ended'), 'no ongoing meeting left')
+
+    // two tabs start a meeting at the same moment: after the merge exactly one stays ongoing
+    const hub2 = createSharedMemoryStorage()
+    const t1 = open({ storage: hub2.view(), seed: 21, demo: false })
+    const t2 = open({ storage: hub2.view(), seed: 22, demo: false })
+    const base = await t1.source.load()
+    await t2.source.load()
+    await t1.source.startMeeting({ title: '탭 1 회의', attendeeIds: [base.members[0].id] })
+    await t2.source.startMeeting({ title: '탭 2 회의', attendeeIds: [base.members[1].id] })
+    t1.handle.flush()
+    t2.handle.flush()
+    t1.handle.flush()
+    checkInvariants(await t1.source.load(), 'tab 1 after concurrent starts')
+    checkInvariants(await t2.source.load(), 'tab 2 after concurrent starts')
+    const stored: Workspace = JSON.parse(hub2.view().getItem(STORAGE_KEY)!).workspace
+    checkInvariants(stored, 'stored after concurrent starts')
+    assert(stored.meetings.filter((m) => m.status === 'ongoing').length === 1, 'exactly one ongoing meeting after the merge')
+    console.log('meetings ok')
   }
 
   console.log(`\nALL OK (${checks} checks)`)

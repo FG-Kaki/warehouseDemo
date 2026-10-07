@@ -184,7 +184,8 @@ export const Avatar = memo(function Avatar({ member, spawn, leaving, onGone }: A
   useFrame((state, delta) => {
     const g = root.current
     if (!g) return
-    const dt = Math.min(delta, 0.05)
+    // `delta` (real time) drives walking so low fps doesn't slow the bots; `dt` is only for smoothing/animation.
+    const dt = Math.min(delta, 0.1)
     const w = walker.current
     if (walkerReset.current) {
       walkerReset.current = false
@@ -212,18 +213,28 @@ export const Avatar = memo(function Avatar({ member, spawn, leaving, onGone }: A
       w.gone = false
     }
 
-    // ---- movement along waypoints ----
+    // ---- movement along waypoints (leftover distance carries over to the next waypoint) ----
     let moving = false
     let desiredYaw = w.yaw
     if (!w.atSpot) {
-      if (w.ri >= w.rx.length) {
-        w.atSpot = true
-      } else {
+      if (delta > 1 && w.spot) {
+        // The tab was in the background: arrive instead of replaying the whole walk.
+        w.x = w.spot.x
+        w.z = w.spot.z
+        w.ri = w.rx.length
+      }
+      let step = SPEED * delta
+      moving = true
+      while (!w.atSpot) {
+        if (w.ri >= w.rx.length) {
+          w.atSpot = true
+          break
+        }
         const dx = w.rx[w.ri] - w.x
         const dz = w.rz[w.ri] - w.z
         const d = Math.hypot(dx, dz)
-        const step = SPEED * dt
         if (d <= step) {
+          step -= d
           w.x = w.rx[w.ri]
           w.z = w.rz[w.ri]
           if (w.rn[w.ri] >= 0) w.anchor = w.rn[w.ri]
@@ -232,8 +243,8 @@ export const Avatar = memo(function Avatar({ member, spawn, leaving, onGone }: A
           w.x += (dx / d) * step
           w.z += (dz / d) * step
           desiredYaw = Math.atan2(dx, dz)
+          break
         }
-        moving = true
       }
     }
     if (w.atSpot && w.spot) desiredYaw = w.spot.facing

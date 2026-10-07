@@ -95,6 +95,10 @@ const TASKS: SeedTask[] = [
   { p: 'OPS', title: '미사용 클라우드 리소스 정리', desc: '사용하지 않는 볼륨과 오래된 스냅샷을 찾아 비용을 줄입니다.', status: 'todo', pri: 'low', est: 2, who: 0, due: null },
 ]
 
+// Open tasks already on the agenda for the next meeting, so the feature is visible on first load:
+// 20 = the overdue log-aggregation query, 35 = the urgent crash-report triage (backlog).
+const AGENDA_NUMBERS = [20, 35]
+
 interface SeedEvent {
   /** Hours before now. */
   h: number
@@ -189,6 +193,7 @@ export function buildSeed(now: Date): Persisted {
       createdAt: iso(createdMs),
       updatedAt: iso(updatedMs),
       completedAt: completedMs === null ? null : iso(completedMs),
+      onAgenda: AGENDA_NUMBERS.includes(number),
     }
   })
   const taskOf = (number: number) => tasks[number - 1]
@@ -221,7 +226,7 @@ export function buildSeed(now: Date): Persisted {
 
   return {
     version: 1,
-    workspace: { projects: PROJECTS.map((p) => ({ ...p })), members, tasks, activity },
+    workspace: { projects: PROJECTS.map((p) => ({ ...p })), members, tasks, meetings: [], activity },
     nextNumber: TASKS.length + 1,
   }
 }

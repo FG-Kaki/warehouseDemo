@@ -103,7 +103,16 @@ export function createApp({ repo, hub, applyDemo, isClosing, port }: RouteDeps) 
     return noContent(repo.deleteMember(c.req.param('id'), reassign, ctxOf(c)).seq)
   })
 
-  app.get('/api/demo', () => json({ on: repo.demoOn() }))
+  app.post('/api/meetings', async (c) => {
+    const { value, seq } = repo.startMeeting(await readBody(c), ctxOf(c))
+    return json(value, 201, seqHeader(seq))
+  })
+  app.post('/api/meetings/:id/end', async (c) => {
+    const { value, seq } = repo.endMeeting(c.req.param('id'), await readBody(c), ctxOf(c))
+    return json(value, 200, seqHeader(seq))
+  })
+
+  app.get('/api/demo',() => json({ on: repo.demoOn() }))
   app.put('/api/demo', async (c) => {
     const body = await readBody(c)
     if (!isObj(body) || typeof body.on !== 'boolean') throw new DataError('요청 내용이 올바르지 않아요')

@@ -1,18 +1,20 @@
 // All reads and validated mutations. Every mutation runs in ONE transaction; its Changes (entity
 // changes + one activity change) are handed to `publish` only after the commit succeeded.
 import { DataError } from '../../src/data/DataSource.ts'
-import { AVATAR_VARIANTS } from '../../src/data/meta.ts'
+import { AVATAR_VARIANTS, PRIORITY_META } from '../../src/data/meta.ts'
 import { taskKey } from '../../src/data/selectors.ts'
 import { buildSeed } from '../../src/data/mock/seed.ts'
-import { refObject, STATUS_TO, taskObject } from '../../src/data/mock/text.ts'
+import { eul, iGa, refObject, STATUS_TO, taskObject } from '../../src/data/mock/text.ts'
 import type {
   Activity,
   ActivityKind,
   Change,
   Id,
+  Meeting,
   Member,
   MemberInput,
   MemberPatch,
+  MeetingStart,
   Presence,
   Project,
   Reassign,
@@ -25,15 +27,20 @@ import { MAX_MEMBERS, OFFICE } from '../../src/office/layout.ts'
 import type { Db } from './db.ts'
 import {
   type Lookup,
+  checkAgendaFlag,
   checkAssignee,
+  checkAttendees,
   checkCapacity,
   checkColor,
   checkDesk,
   checkDescription,
   checkDueDate,
   checkEstimate,
+  checkMeetingTitle,
   checkName,
+  checkNotes,
   checkOrder,
+  checkOutcomes,
   checkPresence,
   checkPriority,
   checkProject,
@@ -65,6 +72,7 @@ export interface RepoOptions {
 }
 
 const MAX_ACTIVITY = 100
+const MAX_ENDED_MEETINGS = 20
 /** Id prefix of tasks created through bot requests, so the bot can prune only its own done tasks. */
 export const BOT_TASK_PREFIX = 'td'
 
@@ -90,8 +98,18 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
   const members = () => db.all<Member>('members')
   const tasks = () => db.all<Task>('tasks')
 
+  const meetings = () => db.all<Meeting>('meetings')
+  const ongoingMeeting = () => meetings().find((m) => m.status === 'ongoing')
+
+  /** The ongoing meeting plus the 20 most recent ended ones, in insertion order (newest last). */
+  function recentMeetings(): Meeting[] {
+    const all = meetings()
+    const keepEnded = new Set(all.filter((m) => m.status === 'ended').slice(-MAX_ENDED_MEETINGS).map((m) => m.id))
+    return all.filter((m) => m.status === 'ongoing' || keepEnded.has(m.id))
+  }
+
   function workspace(): Workspace {
-    return { projects: projects(), members: members(), tasks: tasks(), activity: db.all<Activity>('activity') }
+    return { projects: projects(), members: members(), tasks: tasks(), meetings: recentMeetings(), activity: db.all<Activity>('activity') }
   }
 
   const findMember = (id: Id) => db.get<Member>('members', id)
@@ -100,6 +118,7 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
   const lookup: Lookup = {
     hasProject: (id) => db.get('projects', id) !== undefined,
     hasMember: (id) => findMember(id) !== undefined,
+    hasTask: (id) => findTask(id) !== undefined,
     deskOwner: (deskId) => members().find((m) => m.deskId === deskId)?.id,
   }
 
@@ -212,6 +231,7 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
         createdAt: at,
         updatedAt: at,
         completedAt: status === 'done' ? at : null,
+        onAgenda: false,
       }
       db.put('tasks', task.id, task)
       touch(ctx, 'task', task.id)
@@ -246,6 +266,13 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
       if (p.assigneeId !== undefined) next.assigneeId = checkAssignee(p.assigneeId, lookup)
       if (p.dueDate !== undefined) next.dueDate = checkDueDate(p.dueDate)
       if (p.order !== undefined) next.order = checkOrder(p.order)
+      if (p.onAgenda !== undefined) next.onAgenda = checkAgendaFlag(p.onAgenda)
+
+      // Done tasks are never on the agenda: completing one clears the flag, putting one on is refused.
+      if ((next.status ?? task.status) === 'done') {
+        if (next.onAgenda === true) throw new DataError('완료된 작업은 안건으로 올릴 수 없어요')
+        if (task.onAgenda) next.onAgenda = false
+      }
 
       const at = iso()
       if (next.assigneeId !== undefined && next.assigneeId !== task.assigneeId && next.order === undefined) {
@@ -294,6 +321,12 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
       touch(ctx, 'task', id)
       db.del('tasks', id)
       out.push({ type: 'task_delete', id })
+      const meeting = ongoingMeeting()
+      if (meeting?.agendaTaskIds.includes(id)) {
+        meeting.agendaTaskIds = meeting.agendaTaskIds.filter((x) => x !== id)
+        db.put('meetings', meeting.id, meeting)
+        out.push({ type: 'meeting_upsert', meeting })
+      }
       addActivity(out, ctx, { kind: 'task_deleted', message: `${by(ctx)}${taskObject(refOf(task), task.title)} 삭제했어요` })
     })
   }
@@ -356,6 +389,11 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
       if (p.deskId !== undefined) next.deskId = checkDesk(p.deskId, lookup, id)
       if (p.presence !== undefined) next.presence = checkPresence(p.presence)
 
+      // The bot leaves people in an ongoing meeting alone.
+      if (ctx.actor && next.presence !== undefined && next.presence !== member.presence && ongoingMeeting()?.attendeeIds.includes(id)) {
+        throw new DataError('회의 중인 팀원이라 지금은 바꿀 수 없어요', 'conflict')
+      }
+
       const changed = (Object.keys(next) as (keyof Member)[]).filter((k) => next[k] !== member[k])
       if (changed.length === 0) return member
       Object.assign(member, next)
@@ -410,6 +448,12 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
       }
       db.del('members', id)
       out.push({ type: 'member_delete', id })
+      const meeting = ongoingMeeting()
+      if (meeting?.attendeeIds.includes(id)) {
+        meeting.attendeeIds = meeting.attendeeIds.filter((x) => x !== id)
+        db.put('meetings', meeting.id, meeting)
+        out.push({ type: 'meeting_upsert', meeting })
+      }
 
       let message = `${member.name} 님이 팀을 떠났어요`
       if (movedOpen > 0) {
@@ -421,21 +465,139 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
     })
   }
 
+  // ---- meetings -----------------------------------------------------------------
+
+  function startMeeting(input: unknown, ctx: Ctx = MANAGER): Done<Meeting> {
+    return mutate((out) => {
+      if (!isObj(input)) throw new DataError('회의 이름을 입력해 주세요')
+      const i = input as Partial<MeetingStart>
+      const title = checkMeetingTitle(i.title)
+      const attendeeIds = checkAttendees(i.attendeeIds, lookup)
+      if (ongoingMeeting()) throw new DataError('이미 회의가 진행 중이에요', 'conflict')
+
+      const weight = (t: Task) => PRIORITY_META[t.priority].weight
+      const agendaTaskIds = tasks()
+        .filter((t) => t.onAgenda && t.status !== 'done')
+        .sort((a, b) => weight(b) - weight(a) || a.number - b.number)
+        .map((t) => t.id)
+
+      for (const id of attendeeIds) {
+        const member = findMember(id)!
+        member.presence = 'meeting'
+        db.put('members', id, member)
+        touch(ctx, 'member', id)
+        out.push({ type: 'member_upsert', member })
+      }
+      const meeting: Meeting = {
+        id: uid('mt', (id) => db.get('meetings', id) !== undefined),
+        title,
+        attendeeIds,
+        agendaTaskIds,
+        status: 'ongoing',
+        startedAt: iso(),
+        endedAt: null,
+        notes: '',
+        outcomes: [],
+      }
+      db.put('meetings', meeting.id, meeting)
+      out.push({ type: 'meeting_upsert', meeting })
+      addActivity(out, ctx, {
+        kind: 'meeting_started',
+        message: `${by(ctx)}${title}${eul(title)} 시작했어요 · 참석 ${attendeeIds.length}명 · 안건 ${agendaTaskIds.length}건`,
+      })
+      return meeting
+    })
+  }
+
+  function endMeeting(id: Id, input: unknown, ctx: Ctx = MANAGER): Done<Meeting> {
+    return mutate((out) => {
+      const meeting = db.get<Meeting>('meetings', id)
+      if (!meeting) throw new DataError('회의를 찾을 수 없어요', 'not_found')
+      if (meeting.status !== 'ongoing') throw new DataError('이미 끝난 회의예요', 'conflict')
+      if (!isObj(input)) throw new DataError('요청 내용이 올바르지 않아요')
+      const notes = checkNotes(input.notes)
+      const outcomes = checkOutcomes(input.outcomes, meeting.agendaTaskIds, lookup)
+
+      // Apply the decisions. Tasks deleted meanwhile are no longer on the agenda (see deleteTask).
+      const at = iso()
+      const decided = new Map(outcomes.map((o) => [o.taskId, o]))
+      for (const taskId of meeting.agendaTaskIds) {
+        const task = findTask(taskId)
+        if (!task) continue
+        const o = decided.get(taskId) ?? { taskId, action: 'keep' as const }
+        const before = JSON.stringify(task)
+        if (o.action === 'assign') {
+          if (task.assigneeId !== o.memberId) {
+            task.assigneeId = o.memberId
+            task.order = topOrder(o.memberId)
+          }
+        } else if (o.action === 'status') {
+          if (task.status !== o.status) {
+            task.status = o.status
+            task.completedAt = o.status === 'done' ? at : null
+          }
+        } else if (o.action === 'backlog') {
+          if (task.assigneeId !== null) {
+            task.assigneeId = null
+            task.order = topOrder(null)
+          }
+          if (task.status === 'in_progress' || task.status === 'review') task.status = 'todo'
+        }
+        if (o.action !== 'keep') task.onAgenda = false
+        if (JSON.stringify(task) === before) continue
+        task.updatedAt = at
+        db.put('tasks', task.id, task) // written before the next topOrder() so stacks stay consistent
+        touch(ctx, 'task', task.id)
+        out.push({ type: 'task_upsert', task })
+      }
+
+      for (const memberId of meeting.attendeeIds) {
+        const member = findMember(memberId)
+        if (!member || member.presence !== 'meeting') continue
+        member.presence = 'working'
+        db.put('members', memberId, member)
+        touch(ctx, 'member', memberId)
+        out.push({ type: 'member_upsert', member })
+      }
+
+      Object.assign(meeting, { status: 'ended', endedAt: at, notes, outcomes })
+      db.put('meetings', id, meeting)
+      db.trim('meetings', MAX_ENDED_MEETINGS) // nothing is ongoing any more: keep only the recent ones
+      out.push({ type: 'meeting_upsert', meeting })
+      const decisions = outcomes.filter((o) => o.action !== 'keep').length
+      addActivity(out, ctx, { kind: 'meeting_ended', message: `${by(ctx)}${meeting.title}${iGa(meeting.title)} 끝났어요 · 결정 ${decisions}건` })
+      return meeting
+    })
+  }
+
   // ---- seed / reset -------------------------------------------------------------
 
   function load(seed: ReturnType<typeof buildSeed>) {
     const ws = seed.workspace
-    for (const t of ['projects', 'members', 'tasks', 'activity'] as const) db.clear(t)
+    for (const t of ['projects', 'members', 'tasks', 'meetings', 'activity'] as const) db.clear(t)
     for (const p of ws.projects) db.put('projects', p.id, p)
     for (const m of ws.members) db.put('members', m.id, m)
-    for (const t of ws.tasks) db.put('tasks', t.id, t)
+    for (const t of ws.tasks) db.put('tasks', t.id, { ...t, onAgenda: t.onAgenda === true })
+    for (const m of ws.meetings ?? []) db.put('meetings', m.id, m)
     for (const a of ws.activity) db.put('activity', a.id, a)
     db.setMeta('nextNumber', String(seed.nextNumber))
   }
 
-  /** First start: seeds an empty database so the server shows the same office as the mock source. */
+  /** Schema upgrade for databases written before meetings existed: tasks gain `onAgenda: false`. */
+  function migrate() {
+    db.tx(() => {
+      for (const t of db.all<Task>('tasks')) {
+        if (typeof t.onAgenda !== 'boolean') db.put('tasks', t.id, { ...t, onAgenda: false })
+      }
+    })
+  }
+
+  /** Boot: seeds an empty database (same office as the mock source), otherwise upgrades an old one. */
   function seedIfEmpty(): boolean {
-    if (db.meta('nextNumber') !== undefined) return false
+    if (db.meta('nextNumber') !== undefined) {
+      migrate()
+      return false
+    }
     db.tx(() => load(buildSeed(now())))
     return true
   }
@@ -480,6 +642,8 @@ export function createRepo(db: Db, publish: (entries: { seq: number; change: Cha
     createMember,
     updateMember,
     deleteMember,
+    startMeeting,
+    endMeeting,
   }
 }
 

@@ -141,12 +141,14 @@ textarea.select { height: auto; padding: 7px 8px; resize: vertical; line-height:
   pointer-events: none;
   transition: right 0.25s ease;
 }
-.topbar { width: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-height: 52px; padding: 6px 8px 6px 16px; animation: slide-down 0.35s ease both; }
+.topbar { container-type: inline-size; width: 100%; display: flex; align-items: center; flex-wrap: nowrap; gap: 8px 16px; min-height: 52px; padding: 6px 8px 6px 16px; animation: slide-down 0.35s ease both; }
 .brand { display: flex; align-items: center; gap: 8px; flex: none; }
+.topbar > * { flex-shrink: 0; }
+.topbar > .kpis { flex-shrink: 1; }
 .brand-mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; background: var(--accent); color: #fff; }
 .brand-name { font-size: var(--fs-l); font-weight: 700; letter-spacing: -0.02em; }
 
-.kpis { display: flex; align-items: center; flex-wrap: wrap; }
+.kpis { display: flex; align-items: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
 .kpi { display: flex; flex-direction: column; align-items: flex-start; gap: 0; padding: 2px 16px; border: 0; border-left: 1px solid var(--line); background: transparent; text-align: left; line-height: 1.2; }
 .kpi-click { cursor: pointer; }
 .kpi-click:hover .kpi-value { color: var(--accent); }
@@ -222,7 +224,7 @@ textarea.select { height: auto; padding: 7px 8px; resize: vertical; line-height:
 .feed-time { flex: none; font-size: var(--fs-s); color: var(--text-dim); opacity: 0.8; font-variant-numeric: tabular-nums; }
 
 /* ---- drag ghost ---- */
-.ghost { position: fixed; left: 0; top: 0; z-index: 100; width: 210px; padding: 8px 10px; border-radius: 12px; background: var(--panel-solid); border: 1px solid rgba(58, 99, 224, 0.4); box-shadow: 0 12px 30px rgba(30, 45, 90, 0.28); pointer-events: none; will-change: transform; rotate: -2deg; }
+.ghost { position: fixed; left: 0; top: 0; z-index: 100; width: 250px; padding: 8px 10px; border-radius: 12px; background: var(--panel-solid); border: 1px solid rgba(58, 99, 224, 0.4); box-shadow: 0 12px 30px rgba(30, 45, 90, 0.28); pointer-events: none; will-change: transform; rotate: -2deg; }
 .ghost.is-ok { border-color: var(--good); }
 .ghost-key { font-size: 11px; font-weight: 700; color: var(--text-dim); }
 .ghost-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

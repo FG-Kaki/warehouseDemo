@@ -7,8 +7,12 @@ import { taskKey } from '../selectors'
 import type {
   Activity,
   ActivityKind,
+  AgendaOutcome,
   Change,
   Id,
+  Meeting,
+  MeetingEnd,
+  MeetingStart,
   Member,
   MemberInput,
   MemberPatch,
@@ -21,8 +25,8 @@ import type {
 } from '../types'
 import { MAX_MEMBERS, OFFICE, deskById } from '../../office/layout'
 import { buildSeed } from './seed'
-import { META_KEY, STORAGE_KEY, backupCorrupt, loadPersisted, parsePersisted, type Persisted, type StorageLike } from './storage'
-import { refObject, STATUS_TO, taskObject } from './text'
+import { META_KEY, STORAGE_KEY, backupCorrupt, loadPersisted, normalizeMeetings, parsePersisted, type Persisted, type StorageLike } from './storage'
+import { eul, iGa, refObject, STATUS_TO, taskObject } from './text'
 
 export interface EngineOptions {
   storage: StorageLike
@@ -58,6 +62,8 @@ export interface MockEngine {
   createMember(input: MemberInput): Member
   updateMember(id: Id, patch: MemberPatch): Member
   deleteMember(id: Id, reassign: Reassign): void
+  startMeeting(input: MeetingStart): Meeting
+  endMeeting(id: Id, result: MeetingEnd): Meeting
   /** Demo helper: change presence of several members in one go, with an optional activity. */
   setPresence(ids: Id[], presence: Presence, activity?: { message: string; memberId?: Id } | null): void
   reset(): Workspace
@@ -105,6 +111,7 @@ export function createEngine(opts: EngineOptions): MockEngine {
   const dirtyMembers = new Set<Id>()
   const deletedMembers = new Set<Id>()
   const dirtyActivity = new Set<Id>()
+  const dirtyMeetings = new Set<Id>()
   const planOps = new Map<Id, ReturnPlan | null>()
   /** Last workspace / meta strings we wrote or adopted; a different stored string means another tab wrote. */
   let lastRaw: string | null = null
@@ -210,6 +217,7 @@ export function createEngine(opts: EngineOptions): MockEngine {
     dirtyMembers.clear()
     deletedMembers.clear()
     dirtyActivity.clear()
+    dirtyMeetings.clear()
     return true
   }
 
@@ -323,14 +331,74 @@ export function createEngine(opts: EngineOptions): MockEngine {
       }
     }
 
+    // meetings: remote base, our unsaved versions on top; one ongoing at most; an ongoing one only names who/what still exists
+    const localMeetings = new Map(prev.meetings.map((m) => [m.id, m]))
+    const meetings: Meeting[] = []
+    const seenMeetings = new Set<Id>()
+    for (const m of remote.workspace.meetings) {
+      seenMeetings.add(m.id)
+      const mine = dirtyMeetings.has(m.id) ? localMeetings.get(m.id) : undefined
+      if (!mine || m.status === 'ended') {
+        meetings.push(m) // an ended meeting always beats an ongoing copy (e.g. one this tab edited after another tab ended it)
+      } else if (mine.status === 'ended') {
+        meetings.push(clone(mine))
+      } else {
+        // both copies ongoing: keep only what both still have (someone / something removed on either side stays removed)
+        const merged = clone(m)
+        merged.attendeeIds = m.attendeeIds.filter((id) => mine.attendeeIds.includes(id))
+        merged.agendaTaskIds = m.agendaTaskIds.filter((id) => mine.agendaTaskIds.includes(id))
+        meetings.push(merged)
+      }
+    }
+    for (const id of dirtyMeetings) {
+      const m = localMeetings.get(id)
+      if (m && !seenMeetings.has(id)) meetings.push(clone(m))
+    }
+    const wasOngoing = new Set(meetings.filter((m) => m.status === 'ongoing').map((m) => m.id))
+    if (normalizeMeetings(meetings, iso())) fixed = true
+    const winner = meetings.find((m) => m.status === 'ongoing')
+    let closedHere = 0
+    for (const m of meetings) {
+      if (m.status !== 'ended' || !wasOngoing.has(m.id)) continue
+      if (dirtyMeetings.has(m.id) && !seenMeetings.has(m.id)) closedHere++
+      // two tabs started a meeting at once: the loser is closed and its people go back to work
+      for (const id of m.attendeeIds) {
+        const member = members.find((x) => x.id === id)
+        if (member && member.presence === 'meeting' && !winner?.attendeeIds.includes(id)) member.presence = 'working'
+      }
+    }
+    const taskIdSet = new Set(tasks.map((t) => t.id))
+    for (const m of meetings) {
+      if (m.status !== 'ongoing') continue
+      const a = m.attendeeIds.filter((id) => memberIds.has(id))
+      const g = m.agendaTaskIds.filter((id) => taskIdSet.has(id))
+      if (a.length !== m.attendeeIds.length || g.length !== m.agendaTaskIds.length) {
+        m.attendeeIds = a
+        m.agendaTaskIds = g
+        fixed = true
+      }
+    }
+
     // activity: union by id, oldest first, capped
     const activityIds = new Set(remote.workspace.activity.map((a) => a.id))
     const activity = [...remote.workspace.activity]
     for (const a of prev.activity) if (dirtyActivity.has(a.id) && !activityIds.has(a.id)) activity.push(a)
+    for (let i = 0; i < closedHere; i++) {
+      // this tab's meeting lost against one another tab started at the same time
+      const notice: Activity = {
+        id: uid('a', (id) => activity.some((a) => a.id === id)),
+        at: iso(),
+        kind: 'system',
+        actorId: null,
+        message: '다른 탭에서 시작한 회의가 있어 이 회의를 닫았어요',
+      }
+      activity.push(notice)
+      dirtyActivity.add(notice.id)
+    }
     activity.sort((a, b) => a.at.localeCompare(b.at))
     if (activity.length > MAX_ACTIVITY) activity.splice(0, activity.length - MAX_ACTIVITY)
 
-    const next: Workspace = { projects: remote.workspace.projects, members, tasks, activity }
+    const next: Workspace = { projects: remote.workspace.projects, members, tasks, meetings, activity }
     state = { version: 1, workspace: next, nextNumber }
 
     // tell listeners what differs from what they last saw
@@ -344,12 +412,14 @@ export function createEngine(opts: EngineOptions): MockEngine {
     const nextTaskIds = new Set(tasks.map((t) => t.id))
     for (const t of next.tasks) if (!same(localTasks.get(t.id), t)) changes.push({ type: 'task_upsert', task: t })
     for (const t of prev.tasks) if (!nextTaskIds.has(t.id)) changes.push({ type: 'task_delete', id: t.id })
+    const oldMeetings = new Map(prev.meetings.map((m) => [m.id, m]))
+    for (const m of next.meetings) if (!same(oldMeetings.get(m.id), m)) changes.push({ type: 'meeting_upsert', meeting: m })
     const knownActivity = new Set(prev.activity.map((a) => a.id))
     for (const a of next.activity) if (!knownActivity.has(a.id)) changes.push({ type: 'activity', activity: a })
     emitAll(changes)
     for (const cb of adoptHooks) cb()
 
-    return fixed || dirtyTasks.size > 0 || deletedTasks.size > 0 || dirtyMembers.size > 0 || deletedMembers.size > 0 || dirtyActivity.size > 0
+    return fixed || dirtyTasks.size > 0 || deletedTasks.size > 0 || dirtyMembers.size > 0 || deletedMembers.size > 0 || dirtyActivity.size > 0 || dirtyMeetings.size > 0
   }
 
   /** Writes the workspace now. Anything another tab wrote in the meantime is merged first, never overwritten. */
@@ -451,7 +521,8 @@ export function createEngine(opts: EngineOptions): MockEngine {
       } else if (c.type === 'member_delete') {
         deletedMembers.add(c.id)
         dirtyMembers.delete(c.id)
-      } else if (c.type === 'activity') dirtyActivity.add(c.activity.id)
+      } else if (c.type === 'meeting_upsert') dirtyMeetings.add(c.meeting.id)
+      else if (c.type === 'activity') dirtyActivity.add(c.activity.id)
     }
     schedulePersist()
     emitAll(out)
@@ -595,6 +666,7 @@ export function createEngine(opts: EngineOptions): MockEngine {
       createdAt: at,
       updatedAt: at,
       completedAt: status === 'done' ? at : null,
+      onAgenda: false,
     }
     s.workspace.tasks.push(task)
     if (!meta.demo) touch('task', task.id)
@@ -631,6 +703,12 @@ export function createEngine(opts: EngineOptions): MockEngine {
     if (patch.assigneeId !== undefined) next.assigneeId = checkAssignee(patch.assigneeId)
     if (patch.dueDate !== undefined) next.dueDate = checkDueDate(patch.dueDate)
     if (patch.order !== undefined) next.order = checkOrder(patch.order)
+    if (patch.onAgenda !== undefined) {
+      if (typeof patch.onAgenda !== 'boolean') throw new DataError('안건 값이 올바르지 않아요')
+      next.onAgenda = patch.onAgenda
+    }
+    // an agenda item is an open task: asking for it on a done task (or while completing it) is an error
+    if (next.onAgenda === true && (next.status ?? task.status) === 'done') throw new DataError('완료된 작업은 안건으로 올릴 수 없어요')
 
     const at = iso()
     if (next.assigneeId !== undefined && next.assigneeId !== task.assigneeId && next.order === undefined) {
@@ -639,6 +717,7 @@ export function createEngine(opts: EngineOptions): MockEngine {
     if (next.status !== undefined && next.status !== task.status) {
       next.completedAt = next.status === 'done' ? at : null
     }
+    if (next.status === 'done' && next.onAgenda === undefined) next.onAgenda = false // completing takes it off the agenda
 
     const changed = (Object.keys(next) as (keyof Task)[]).filter((k) => next[k] !== task[k])
     if (changed.length === 0) return clone(task)
@@ -684,7 +763,13 @@ export function createEngine(opts: EngineOptions): MockEngine {
     const draft: ActivityDraft | null = opts.silent
       ? null
       : { kind: 'task_deleted', message: `${taskObject(refOf(task), task.title)} 삭제했어요`, actorId: null }
-    commit([{ type: 'task_delete', id }], draft)
+    const changes: Change[] = [{ type: 'task_delete', id }]
+    const meeting = ongoingMeeting()
+    if (meeting?.agendaTaskIds.includes(id)) {
+      meeting.agendaTaskIds = meeting.agendaTaskIds.filter((x) => x !== id)
+      changes.push({ type: 'meeting_upsert', meeting })
+    }
+    commit(changes, draft)
   }
 
   // ---- members ---------------------------------------------------------------
@@ -795,6 +880,11 @@ export function createEngine(opts: EngineOptions): MockEngine {
     }
     s.workspace.members.splice(s.workspace.members.indexOf(member), 1)
     changes.push({ type: 'member_delete', id })
+    const meeting = ongoingMeeting()
+    if (meeting?.attendeeIds.includes(id)) {
+      meeting.attendeeIds = meeting.attendeeIds.filter((x) => x !== id)
+      changes.push({ type: 'meeting_upsert', meeting })
+    }
 
     let message = `${member.name} 님이 팀을 떠났어요`
     if (movedOpen > 0) {
@@ -815,6 +905,154 @@ export function createEngine(opts: EngineOptions): MockEngine {
     }
     if (changes.length === 0) return
     commit(changes, activity ? { kind: 'presence', message: activity.message, actorId: null, memberId: activity.memberId } : null)
+  }
+
+  // ---- meetings --------------------------------------------------------------
+
+  const ongoingMeeting = (): Meeting | undefined => ensure().workspace.meetings.find((m) => m.status === 'ongoing')
+
+  function startMeeting(input: MeetingStart): Meeting {
+    const s = ensure()
+    if (!isObj(input)) throw new DataError('회의 이름을 입력해 주세요')
+    const title = typeof input.title === 'string' ? input.title.trim() : ''
+    if (title.length === 0) throw new DataError('회의 이름을 입력해 주세요')
+    if (title.length > 60) throw new DataError('회의 이름은 60자 이하로 입력해 주세요')
+    if (!Array.isArray(input.attendeeIds) || input.attendeeIds.length === 0) throw new DataError('참석자를 한 명 이상 골라 주세요')
+    const attendees: Member[] = []
+    for (const id of input.attendeeIds) {
+      const member = typeof id === 'string' ? findMember(id) : undefined
+      if (!member) throw new DataError('팀원을 찾을 수 없어요')
+      if (attendees.includes(member)) throw new DataError('같은 참석자가 여러 번 들어 있어요')
+      attendees.push(member)
+    }
+    if (ongoingMeeting()) throw new DataError('이미 회의가 진행 중이에요', 'conflict')
+
+    const weight = (t: Task) => PRIORITY_META[t.priority].weight
+    const agenda = s.workspace.tasks
+      .filter((t) => t.onAgenda && t.status !== 'done')
+      .sort((a, b) => weight(b) - weight(a) || a.number - b.number)
+    const meeting: Meeting = {
+      id: uid('mt', (id) => s.workspace.meetings.some((m) => m.id === id)),
+      title,
+      attendeeIds: attendees.map((m) => m.id),
+      agendaTaskIds: agenda.map((t) => t.id),
+      status: 'ongoing',
+      startedAt: iso(),
+      endedAt: null,
+      notes: '',
+      outcomes: [],
+    }
+    s.workspace.meetings.push(meeting)
+
+    const changes: Change[] = []
+    for (const member of attendees) {
+      member.presence = 'meeting'
+      touch('member', member.id) // the manager moved them: demo mode keeps its hands off for a while
+      setPlan(member.id, null) // no planned return from an earlier informal meeting / break
+      changes.push({ type: 'member_upsert', member })
+    }
+    changes.push({ type: 'meeting_upsert', meeting })
+    commit(changes, {
+      kind: 'meeting_started',
+      message: `${title}${eul(title)} 시작했어요 · 참석 ${attendees.length}명 · 안건 ${agenda.length}건`,
+      actorId: null,
+    })
+    return clone(meeting)
+  }
+
+  function endMeeting(id: Id, result: MeetingEnd): Meeting {
+    const s = ensure()
+    const meeting = s.workspace.meetings.find((m) => m.id === id)
+    if (!meeting) throw new DataError('회의를 찾을 수 없어요', 'not_found')
+    if (meeting.status !== 'ongoing') throw new DataError('이미 끝난 회의예요', 'conflict')
+    if (!isObj(result)) throw new DataError('회의 결과가 올바르지 않아요')
+    const notes = result.notes === undefined ? '' : result.notes
+    if (typeof notes !== 'string') throw new DataError('회의 메모가 올바르지 않아요')
+    if (notes.length > 2000) throw new DataError('회의록은 2000자 이하로 입력해 주세요')
+    const rawOutcomes = result.outcomes === undefined ? [] : result.outcomes
+    if (!Array.isArray(rawOutcomes)) throw new DataError('회의 결정이 올바르지 않아요')
+
+    const outcomes: AgendaOutcome[] = []
+    const decided = new Set<Id>()
+    for (const raw of rawOutcomes) {
+      if (!isObj(raw) || typeof raw.taskId !== 'string') throw new DataError('회의 결정이 올바르지 않아요')
+      if (decided.has(raw.taskId)) throw new DataError('같은 작업에 결정이 여러 개 있어요')
+      // a task deleted since the agenda was shown is skipped silently; any other task must be on the agenda
+      const exists = findTask(raw.taskId) !== undefined
+      if (!meeting.agendaTaskIds.includes(raw.taskId) && exists) throw new DataError('안건에 없는 작업이에요')
+      decided.add(raw.taskId)
+      switch (raw.action) {
+        case 'assign':
+          if (typeof raw.memberId !== 'string' || !findMember(raw.memberId)) throw new DataError('팀원을 찾을 수 없어요')
+          if (exists) outcomes.push({ taskId: raw.taskId, action: 'assign', memberId: raw.memberId })
+          break
+        case 'status':
+          {
+            const status = checkStatus(raw.status)
+            if (exists) outcomes.push({ taskId: raw.taskId, action: 'status', status })
+          }
+          break
+        case 'backlog':
+        case 'keep':
+          if (exists) outcomes.push({ taskId: raw.taskId, action: raw.action }) // deleted tasks drop out of the record
+          break
+        default:
+          throw new DataError('올바르지 않은 결정이에요')
+      }
+    }
+
+    const at = iso()
+    const changes: Change[] = []
+    const byTask = new Map(outcomes.map((o) => [o.taskId, o]))
+    const decisions = outcomes.filter((o) => o.action !== 'keep').length
+    for (const taskId of meeting.agendaTaskIds) {
+      const task = findTask(taskId)
+      if (!task) continue // deleted meanwhile
+      const outcome = byTask.get(taskId) ?? ({ taskId, action: 'keep' } as const)
+      // outcomes apply to the task as it is now, even one completed during the meeting (a status outcome can reopen it)
+      const before = JSON.stringify(task)
+      if (outcome.action === 'assign') {
+        if (task.assigneeId !== outcome.memberId) {
+          task.assigneeId = outcome.memberId
+          task.order = topOrder(outcome.memberId)
+        }
+      } else if (outcome.action === 'backlog') {
+        if (task.assigneeId !== null) {
+          task.assigneeId = null
+          task.order = topOrder(null)
+        }
+        if (task.status === 'in_progress' || task.status === 'review') task.status = 'todo'
+      } else if (outcome.action === 'status') {
+        if (outcome.status !== task.status) {
+          task.status = outcome.status
+          task.completedAt = outcome.status === 'done' ? at : null
+        }
+      }
+      if (outcome.action !== 'keep') task.onAgenda = false // not settled ('keep' / no outcome): stays on the agenda
+      if (JSON.stringify(task) === before) continue // nothing changed: write and emit nothing
+      task.updatedAt = at
+      touch('task', task.id)
+      changes.push({ type: 'task_upsert', task })
+    }
+
+    meeting.status = 'ended'
+    meeting.endedAt = at
+    meeting.notes = notes
+    meeting.outcomes = outcomes
+    for (const memberId of meeting.attendeeIds) {
+      const member = findMember(memberId)
+      if (!member) continue
+      touch('member', memberId)
+      if (member.presence !== 'meeting') continue // e.g. the manager sent them on a break meanwhile
+      member.presence = 'working'
+      setPlan(memberId, null)
+      changes.push({ type: 'member_upsert', member })
+    }
+    changes.push({ type: 'meeting_upsert', meeting })
+    normalizeMeetings(s.workspace.meetings, at)
+    const title = meeting.title
+    commit(changes, { kind: 'meeting_ended', message: `${title}${iGa(title)} 끝났어요 · 결정 ${decisions}건`, actorId: null })
+    return clone(meeting)
   }
 
   // ---- misc ------------------------------------------------------------------
@@ -851,6 +1089,8 @@ export function createEngine(opts: EngineOptions): MockEngine {
     createMember,
     updateMember,
     deleteMember,
+    startMeeting,
+    endMeeting,
     setPresence,
     reset,
     subscribe(listener) {

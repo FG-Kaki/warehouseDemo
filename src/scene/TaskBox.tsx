@@ -41,6 +41,10 @@ function lerpAngle(a: number, b: number, k: number) {
   return a + d * k
 }
 
+/** Gap between boxes leaving the meeting table, so decisions read as being handed out one by one. */
+const DEPART_STAGGER_MS = 60
+let lastDepart = 0
+
 const easeInOut = (u: number) => (u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2)
 const easeOutBack = (u: number) => 1 + 2.70158 * Math.pow(u - 1, 3) + 1.70158 * Math.pow(u - 1, 2)
 
@@ -60,13 +64,17 @@ interface Anim {
   dur: number
   arc: number
   flying: boolean
+  /** Home of the slot we last flew to. */
+  home: Slot['home'] | ''
+  /** Seconds left before a started flight actually takes off. */
+  wait: number
   lift: number
   pop: number
   scale: number
 }
 
 function newAnim(): Anim {
-  return { init: false, px: 0, py: 0, pz: 0, ry: 0, tx: NaN, ty: 0, tz: 0, fx: 0, fy: 0, fz: 0, t: 0, dur: 1, arc: 0, flying: false, lift: 0, pop: 0, scale: 1 }
+  return { init: false, px: 0, py: 0, pz: 0, ry: 0, tx: NaN, ty: 0, tz: 0, fx: 0, fy: 0, fz: 0, t: 0, dur: 1, arc: 0, flying: false, home: '', wait: 0, lift: 0, pop: 0, scale: 1 }
 }
 
 interface Props {
@@ -152,7 +160,8 @@ export const TaskBox = memo(function TaskBox({ id, slot, dimmed, overlay, pop, t
   useFrame((state, delta) => {
     const g = group.current
     if (!g || !vis) return
-    const dt = Math.min(delta, 0.05)
+    // `delta` drives flight progress and waits (real time, so low fps doesn't slow motion); `dt` is only for smoothing.
+    const dt = Math.min(delta, 0.1)
     const a = anim.current
     const t = state.clock.elapsedTime
 
@@ -167,9 +176,23 @@ export const TaskBox = memo(function TaskBox({ id, slot, dimmed, overlay, pop, t
       a.tz = slot.z
       a.pop = pop ? 0 : 1
       a.scale = slot.scale
+      a.home = slot.home
       body.color.copy(vis.main)
       band.color.copy(vis.strip)
       body.opacity = band.opacity = vis.opacity
+    }
+
+    // The tab was in the background: don't replay old flights, just be where we belong.
+    if (delta > 1 && !isDragged) {
+      a.px = a.tx = slot.x
+      a.py = a.ty = slot.y
+      a.pz = a.tz = slot.z
+      a.flying = false
+      a.wait = 0
+      a.home = slot.home
+      a.ry = slot.rot
+      a.lift = 0
+      a.scale = slot.scale
     }
 
     // ---- position: follow the pointer while dragged, otherwise fly to the slot ----
@@ -193,9 +216,19 @@ export const TaskBox = memo(function TaskBox({ id, slot, dimmed, overlay, pop, t
         a.dur = clamp(0.35 + dist * 0.12, 0.35, 1.5)
         a.arc = dist < 0.8 ? dist * 0.3 : clamp(dist * 0.45 + 0.7, 0.9, 4.5)
         a.flying = dist > 0.004
+        a.wait = 0
+        if (a.flying && a.home === 'agenda' && slot.home !== 'agenda') {
+          const now = performance.now()
+          const start = Math.max(now, lastDepart + DEPART_STAGGER_MS)
+          lastDepart = start
+          a.wait = (start - now) / 1000
+        }
+        a.home = slot.home
       }
-      if (a.flying) {
-        a.t += dt / a.dur
+      if (a.flying && a.wait > 0) {
+        a.wait -= delta
+      } else if (a.flying) {
+        a.t += delta / a.dur
         const u = Math.min(a.t, 1)
         const e = easeInOut(u)
         a.px = a.fx + (a.tx - a.fx) * e

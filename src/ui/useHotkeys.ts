@@ -1,7 +1,7 @@
 // Global keyboard shortcuts. OWNER: ui-builder.
-//   N new task · / search · 1-4 overlays · Esc close dialog, else clear selection
+//   N new task · M start/end meeting · / search · 1-4 overlays · Esc close dialog, else clear selection
 import { useEffect } from 'react'
-import { useOffice, type Overlay } from '../store'
+import { ongoingMeeting, useOffice, type Overlay } from '../store'
 import { useUi } from './uiState'
 
 const OVERLAY_BY_CODE: Record<string, Overlay> = { Digit1: 'none', Digit2: 'workload', Digit3: 'deadline', Digit4: 'project' }
@@ -25,16 +25,20 @@ export function useHotkeys() {
         else if (st.selection) st.select(null)
         return
       }
-      if (st.dialog || st.drag) return
+      if (st.dialog || st.drag || useUi.getState().historyOpen) return
 
       if (e.code === 'KeyN') {
         e.preventDefault()
         st.openDialog({ kind: 'task' })
+      } else if (e.code === 'KeyM') {
+        e.preventDefault()
+        const live = ongoingMeeting(st.meetings)
+        st.openDialog(live ? { kind: 'endMeeting', meetingId: live.id } : { kind: 'startMeeting' })
       } else if (e.code === 'Slash') {
         e.preventDefault()
         const ui = useUi.getState()
         ui.setPanelOpen(true)
-        if (ui.tab === 'team') ui.setTab('kanban')
+        if (ui.tab === 'team' || ui.tab === 'week') ui.setTab('kanban')
         requestAnimationFrame(() => {
           const el = document.getElementById('hud-search')
           el?.focus()

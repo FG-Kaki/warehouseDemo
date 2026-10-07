@@ -3,7 +3,7 @@
 // tests and can send Last-Event-ID). The stream runs while there is at least one subscriber and
 // the workspace has been loaded; it reconnects with backoff and replays from the last seen id.
 import { DataError, type DataErrorCode, type DataSource } from '../DataSource'
-import type { Change, ConnectionStatus, Id, Member, MemberInput, MemberPatch, Reassign, Task, TaskInput, TaskPatch, Workspace } from '../types'
+import type { Change, ConnectionStatus, Id, Meeting, MeetingEnd, MeetingStart, Member, MemberInput, MemberPatch, Reassign, Task, TaskInput, TaskPatch, Workspace } from '../types'
 import { createSseParser } from './sse'
 
 export interface ApiOptions {
@@ -18,7 +18,7 @@ const BACKOFF_START_MS = 1000
 const BACKOFF_MAX_MS = 10_000
 /** The server pings every 10 s; this much silence means the link is dead. */
 const IDLE_LIMIT_MS = 25_000
-/** How many streamed task/member positions are remembered for stale-response detection. */
+/** How many streamed task/member/meeting positions are remembered for stale-response detection. */
 const STREAMED_MAX = 600
 
 const CODES: DataErrorCode[] = ['invalid', 'not_found', 'conflict', 'unavailable']
@@ -48,7 +48,7 @@ async function toError(res: Response): Promise<DataError> {
   return new DataError(res.status >= 500 ? '서버에서 문제가 생겼어요' : '요청을 처리하지 못했어요', codeForStatus(res.status))
 }
 
-type EntityKind = 'task' | 'member'
+type EntityKind = 'task' | 'member' | 'meeting'
 
 export function createApiDataSource(opts: ApiOptions = {}): ApiDataSource {
   const base = (opts.baseUrl ?? '').replace(/\/+$/, '')
@@ -68,9 +68,9 @@ export function createApiDataSource(opts: ApiOptions = {}): ApiDataSource {
    * Latest streamed state per entity with its seq (null entity = deleted). A REST response whose
    * X-Seq is not newer than this is stale: the stream already delivered something later.
    */
-  const streamed = new Map<string, { seq: number; entity: Task | Member | null }>()
+  const streamed = new Map<string, { seq: number; entity: Task | Member | Meeting | null }>()
 
-  const remember = (key: string, seq: number, entity: Task | Member | null) => {
+  const remember = (key: string, seq: number, entity: Task | Member | Meeting | null) => {
     streamed.delete(key)
     streamed.set(key, { seq, entity })
     if (streamed.size > STREAMED_MAX) {
@@ -119,7 +119,7 @@ export function createApiDataSource(opts: ApiOptions = {}): ApiDataSource {
   const json = async <T>(method: string, path: string, payload?: unknown): Promise<T> => body<T>(await send(method, path, payload))
 
   /** Runs a task/member mutation and resolves with the newest known state of that entity. */
-  async function mutate<T extends Task | Member>(kind: EntityKind, method: string, path: string, payload: unknown): Promise<T> {
+  async function mutate<T extends Task | Member | Meeting>(kind: EntityKind, method: string, path: string, payload: unknown): Promise<T> {
     const res = await send(method, path, payload)
     const entity = await body<T>(res)
     const header = res.headers.get('X-Seq')
@@ -127,7 +127,7 @@ export function createApiDataSource(opts: ApiOptions = {}): ApiDataSource {
     if (Number.isFinite(seq)) {
       const rec = streamed.get(`${kind}:${entity.id}`)
       if (rec && rec.seq >= seq) {
-        if (rec.entity === null) throw new DataError(kind === 'task' ? '작업을 찾을 수 없어요' : '팀원을 찾을 수 없어요', 'not_found')
+        if (rec.entity === null) throw new DataError(kind === 'task' ? '작업을 찾을 수 없어요' : kind === 'member' ? '팀원을 찾을 수 없어요' : '회의를 찾을 수 없어요', 'not_found')
         return structuredClone(rec.entity) as T
       }
     }
@@ -175,6 +175,7 @@ export function createApiDataSource(opts: ApiOptions = {}): ApiDataSource {
       else if (change.type === 'task_delete') remember(`task:${change.id}`, seq, null)
       else if (change.type === 'member_upsert') remember(`member:${change.member.id}`, seq, change.member)
       else if (change.type === 'member_delete') remember(`member:${change.id}`, seq, null)
+      else if (change.type === 'meeting_upsert') remember(`meeting:${change.meeting.id}`, seq, change.meeting)
     }
     if (change.type === 'snapshot') streamed.clear()
     if (change.type === 'demo') demoOn = change.on
@@ -325,6 +326,9 @@ export function createApiDataSource(opts: ApiOptions = {}): ApiDataSource {
       const q = reassign.mode === 'member' ? `reassignTo=${encodeURIComponent(reassign.memberId)}` : 'reassign=backlog'
       await send('DELETE', `/api/members/${encodeURIComponent(id)}?${q}`)
     },
+
+    startMeeting: (input: MeetingStart) => mutate<Meeting>('meeting', 'POST', '/api/meetings', input),
+    endMeeting: (id: Id, result: MeetingEnd) => mutate<Meeting>('meeting', 'POST', `/api/meetings/${encodeURIComponent(id)}/end`, result),
 
     subscribe(listener) {
       listeners.add(listener)

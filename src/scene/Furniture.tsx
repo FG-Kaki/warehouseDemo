@@ -41,6 +41,9 @@ function Sofa({ p, ry = 0, w = 4, d = 0.95 }: { p: V3; ry?: number; w?: number; 
   )
 }
 
+/** Top surface of the meeting table (agenda boxes sit on it). */
+export const TABLE_TOP_Y = 0.75
+
 function MeetingRoom() {
   const { cx, cz, tableW, tableD } = ROOMS.meeting
   const chairs = Array.from({ length: 10 }, (_, i) => meetingSeat(i))

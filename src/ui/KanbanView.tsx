@@ -46,6 +46,7 @@ export const TaskCard = memo(function TaskCard({ taskId }: { taskId: Id }) {
       <div className="card-top">
         <PriorityDot priority={task.priority} />
         <span className="card-key">{taskKey(task, projectKey)}</span>
+        {task.onAgenda && <span className="agenda-tag" title="다음 회의 안건">안건</span>}
         {due && <span className={`due due-${due.tone}`}>{due.text}</span>}
       </div>
       <div className="card-title">{task.title}</div>

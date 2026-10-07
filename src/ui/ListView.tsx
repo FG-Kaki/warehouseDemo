@@ -49,7 +49,10 @@ const Row = memo(function Row({ taskId }: { taskId: Id }) {
     >
       <span className="c-key">{key}</span>
       <span className="c-title" title={task.title}>
-        <span className="l-title">{task.title}</span>
+        <span className="l-title">
+          {task.onAgenda && <span className="agenda-tag">안건</span>}
+          {task.title}
+        </span>
         <span className="l-sub">{key}</span>
       </span>
       <span className="c-status">

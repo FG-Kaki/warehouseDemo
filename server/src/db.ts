@@ -2,8 +2,8 @@
 // `id` + the entity as a JSON string. Insertion order (rowid) is the list order, like the mock source.
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 
-export type Table = 'projects' | 'members' | 'tasks' | 'activity'
-const TABLES: Table[] = ['projects', 'members', 'tasks', 'activity']
+export type Table = 'projects' | 'members' | 'tasks' | 'meetings' | 'activity'
+const TABLES: Table[] = ['projects', 'members', 'tasks', 'meetings', 'activity']
 
 export interface Db {
   /** Runs `fn` in one transaction (BEGIN IMMEDIATE .. COMMIT, ROLLBACK when it throws). */

@@ -37,6 +37,8 @@ export interface Task {
   updatedAt: string
   /** ISO datetime when status became 'done', else null. */
   completedAt: string | null
+  /** On the agenda for the next team meeting (sits on the meeting-room table). Open tasks only. */
+  onAgenda: boolean
 }
 
 /** Where a member is right now. Drives where the avatar walks to. */
@@ -69,6 +71,8 @@ export type ActivityKind =
   | 'member_updated'
   | 'member_left'
   | 'presence'
+  | 'meeting_started'
+  | 'meeting_ended'
   /** Notices from the data source itself (e.g. storage recovered). */
   | 'system'
 
@@ -84,11 +88,51 @@ export interface Activity {
   message: string
 }
 
+// ---- Meetings (one meeting room → at most one ongoing meeting) -------------------
+
+export type MeetingStatus = 'ongoing' | 'ended'
+
+/** What the team decided for one agenda task when the meeting ended. */
+export type AgendaOutcome =
+  | { taskId: Id; action: 'assign'; memberId: Id }
+  | { taskId: Id; action: 'status'; status: TaskStatus }
+  | { taskId: Id; action: 'backlog' }
+  /** Not settled — stays on the agenda for the next meeting. */
+  | { taskId: Id; action: 'keep' }
+
+export interface Meeting {
+  id: Id
+  title: string
+  attendeeIds: Id[]
+  /** Agenda tasks captured when the meeting started (tasks with onAgenda), in order. */
+  agendaTaskIds: Id[]
+  status: MeetingStatus
+  startedAt: string
+  endedAt: string | null
+  /** Free-form minutes written at the end. */
+  notes: string
+  /** Decisions applied at the end (empty while ongoing). */
+  outcomes: AgendaOutcome[]
+}
+
+export interface MeetingStart {
+  title: string
+  attendeeIds: Id[]
+}
+
+export interface MeetingEnd {
+  notes: string
+  /** At most one per agenda task; agenda tasks without an outcome count as 'keep'. */
+  outcomes: AgendaOutcome[]
+}
+
 /** Everything the app needs at startup. */
 export interface Workspace {
   projects: Project[]
   members: Member[]
   tasks: Task[]
+  /** The ongoing meeting (if any) plus the most recent ended ones, newest last, at most 20. */
+  meetings: Meeting[]
   /** Newest last, at most ~100. */
   activity: Activity[]
 }
@@ -99,7 +143,7 @@ export type TaskInput = Pick<Task, 'title' | 'projectId'> &
   Partial<Pick<Task, 'description' | 'status' | 'priority' | 'estimate' | 'assigneeId' | 'dueDate'>>
 
 export type TaskPatch = Partial<
-  Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'estimate' | 'projectId' | 'assigneeId' | 'dueDate' | 'order'>
+  Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'estimate' | 'projectId' | 'assigneeId' | 'dueDate' | 'order' | 'onAgenda'>
 >
 
 /** deskId is optional: the source picks a free desk when omitted. */
@@ -120,6 +164,7 @@ export type Change =
   | { type: 'member_upsert'; member: Member }
   | { type: 'member_delete'; id: Id }
   | { type: 'project_upsert'; project: Project }
+  | { type: 'meeting_upsert'; meeting: Meeting }
   | { type: 'activity'; activity: Activity }
   /** Replace everything (e.g. after a reset, or when a reconnect can't replay missed changes). */
   | { type: 'snapshot'; workspace: Workspace }

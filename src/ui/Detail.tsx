@@ -108,6 +108,7 @@ function TaskDetail({ taskId }: { taskId: Id }) {
         <span className="detail-key">{taskKey(task, projectKey)}</span>
         <ProjectTag projectId={task.projectId} />
         {due && <span className={`due due-${due.tone}`}>{due.text}</span>}
+        {task.onAgenda && <span className="agenda-tag" title="다음 회의 안건">안건</span>}
         <span className="grow" />
         <CloseButton />
       </div>
@@ -208,6 +209,12 @@ function TaskDetail({ taskId }: { taskId: Id }) {
           <Icon name="locate" size={14} />
           3D에서 보기
         </button>
+        {task.status !== 'done' && (
+          <button type="button" className="btn btn-sm" onClick={() => void st.setAgenda(taskId, !task.onAgenda)}>
+            <Icon name="flag" size={14} />
+            {task.onAgenda ? '안건에서 내리기' : '안건으로 올리기'}
+          </button>
+        )}
         <span className="grow" />
         <button type="button" className="btn btn-sm btn-danger" onClick={() => st.openDialog({ kind: 'deleteTask', taskId })}>
           <Icon name="trash" size={14} />

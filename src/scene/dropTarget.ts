@@ -1,9 +1,10 @@
-// Synchronous drop-target hit test: pointer (client px) → ray vs tall boxes → member desk/avatar or backlog shelf.
+// Synchronous drop-target hit test: pointer (client px) → ray vs tall boxes → member desk/avatar, backlog shelf or meeting table.
 // Called from DOM event handlers (never from useFrame) so the target is always current when pointerup lands.
 import { Box3, Plane, Ray, Raycaster, Vector2, Vector3 } from 'three'
 import { OFFICE } from '../office/layout'
 import { useOffice, type DropTarget } from '../store'
-import { BACKLOG_CENTER_X } from './Furniture'
+import { BACKLOG_CENTER_X, TABLE_TOP_Y } from './Furniture'
+import { ROOMS } from './paths'
 import { avatarLive, DRAG_Y, dragPoint, sceneApi } from './runtime'
 
 const ray = new Raycaster()
@@ -13,6 +14,15 @@ const tmpBox = new Box3()
 const localRay = new Ray()
 // Desk footprint + chair area in desk-local space (+z = monitor side), up to 3 m tall.
 const deskBox = new Box3(new Vector3(-1.05, 0, -1.6), new Vector3(1.05, 3, 0.8))
+// Meeting table + a small margin, low enough that a ray aimed at an attendee's body hits the bot first.
+const MT = ROOMS.meeting
+const tableBox = new Box3(
+  new Vector3(MT.cx - MT.tableW / 2 - 0.25, 0, MT.cz - MT.tableD / 2 - 0.2),
+  new Vector3(MT.cx + MT.tableW / 2 + 0.25, TABLE_TOP_Y + 0.25, MT.cz + MT.tableD / 2 + 0.2),
+)
+// Rest of the room floor: only used when nothing else (bot, desk, shelf) was under the pointer at all.
+const MR = OFFICE.meetingRoom
+const roomBox = new Box3(new Vector3(MR.x, 0, MR.z), new Vector3(MR.x + MR.w, 0.6, MR.z + MR.d))
 const hitA = new Vector3()
 const hitB = new Vector3()
 
@@ -109,7 +119,18 @@ export function updateDropTarget(clientX: number, clientY: number) {
   const A = OFFICE.backlogShelf
   tmpBox.min.set(BACKLOG_CENTER_X - 0.6, 0, A.z - 0.1)
   tmpBox.max.set(BACKLOG_CENTER_X + 0.6, 3, A.z + A.d + 0.1)
-  if (ray.ray.intersectBox(tmpBox, hitB) && o.distanceTo(hitB) < best) target = { kind: 'backlog' }
+  if (ray.ray.intersectBox(tmpBox, hitB) && o.distanceTo(hitB) < best) {
+    best = o.distanceTo(hitB)
+    target = { kind: 'backlog' }
+  }
+
+  // Meeting table: only for open tasks that aren't on the agenda yet (dropping back on it is a no-op).
+  const drag = useOffice.getState().drag
+  const dragged = drag ? useOffice.getState().tasks[drag.taskId] : undefined
+  if (dragged && dragged.status !== 'done' && !dragged.onAgenda) {
+    if (ray.ray.intersectBox(tableBox, hitB) && o.distanceTo(hitB) < best) target = { kind: 'agenda' }
+    else if (target === null && ray.ray.intersectBox(roomBox, hitB)) target = { kind: 'agenda' }
+  }
   publish(target)
 }
 

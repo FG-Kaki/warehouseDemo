@@ -1,8 +1,10 @@
 // Where every task box wants to be: desk stack, backlog shelf or done shelf.
+import { PRIORITY_META } from '../data/meta'
 import { backlogTasks, isOpen, tasksOf, workload } from '../data/selectors'
 import type { Id, Member, Task } from '../data/types'
 import { deskById, OFFICE } from '../office/layout'
-import { BACKLOG_CENTER_X, BACKLOG_LEVELS, DONE_TOP } from './Furniture'
+import { BACKLOG_CENTER_X, BACKLOG_LEVELS, DONE_TOP, TABLE_TOP_Y } from './Furniture'
+import { ROOMS } from './paths'
 import { DESK_TOP_Y, deskLocalToWorld } from './Desks'
 
 export const BOX_W = 0.42
@@ -19,7 +21,25 @@ export interface Slot {
   scale: number
   /** 0 = steady, 1 = gently wobbling (overloaded owner's stack). */
   wobble: number
-  home: 'desk' | 'backlog' | 'done'
+  home: 'desk' | 'backlog' | 'done' | 'agenda'
+}
+
+/** Meeting-table slot order: centre-out along the table so a few items sit in the middle. */
+export const AGENDA_COLS = [3, 4, 2, 5, 1, 6, 0]
+const AGENDA_PITCH = 0.52
+const AGENDA_ROWS = [0, -0.36, 0.36]
+const AGENDA_PER_ROW = AGENDA_COLS.length
+/** Boxes shown on the table; the rest wait (hidden) and are counted by the room tag. */
+export const AGENDA_VISIBLE = AGENDA_PER_ROW * AGENDA_ROWS.length
+
+/** World position of the k-th agenda slot on the meeting table. */
+export function agendaPos(k: number, out: { x: number; y: number; z: number }) {
+  const { cx, cz } = ROOMS.meeting
+  const inRow = k % AGENDA_PER_ROW
+  const row = Math.min(Math.floor(k / AGENDA_PER_ROW), AGENDA_ROWS.length - 1)
+  out.x = cx + (AGENDA_COLS[inRow] - (AGENDA_PER_ROW - 1) / 2) * AGENDA_PITCH
+  out.z = cz + AGENDA_ROWS[row]
+  out.y = TABLE_TOP_Y
 }
 
 function hash01(s: string): number {
@@ -29,6 +49,7 @@ function hash01(s: string): number {
 }
 
 const tmp = { x: 0, z: 0 }
+const tmp3 = { x: 0, y: 0, z: 0 }
 const STACK_COLS = [
   { lx: 0.69, lz: 0.25 },
   { lx: 0.69, lz: -0.23 },
@@ -63,12 +84,14 @@ export function computeSlots(
     out.set(id, old && sameSlot(old, s) ? old : s)
   }
 
+  const onTable = (t: Task) => t.onAgenda === true && isOpen(t)
+
   // ---- desk stacks ----
   const orphans: Task[] = []
   for (const m of Object.values(members)) {
     const desk = deskById(m.deskId)
     if (!desk) continue
-    const list = tasksOf(tasks, m.id)
+    const list = tasksOf(tasks, m.id).filter((t) => !onTable(t))
     const inProg = list.find((t) => t.status === 'in_progress')
     const rest = inProg ? list.filter((t) => t !== inProg) : list
     const wobble = workload(m, tasks) > 1.3 ? 1 : 0
@@ -90,14 +113,14 @@ export function computeSlots(
 
   // Open tasks whose owner (or owner's desk) is missing wait on the backlog shelf.
   for (const t of Object.values(tasks)) {
-    if (!isOpen(t) || t.assigneeId === null) continue
+    if (!isOpen(t) || t.assigneeId === null || onTable(t)) continue
     const m = members[t.assigneeId]
     if (!m || !deskById(m.deskId)) orphans.push(t)
   }
 
   // ---- backlog shelf ----
   const A = OFFICE.backlogShelf
-  const shelf = [...backlogTasks(tasks), ...orphans]
+  const shelf = [...backlogTasks(tasks).filter((t) => !onTable(t)), ...orphans]
   const levels = BACKLOG_LEVELS.length
   const cols = 10
   const pitch = 0.56
@@ -113,6 +136,17 @@ export function computeSlots(
       y = BACKLOG_LEVELS[level] + 0.75 + Math.floor(extra / cols) * 0.5
     }
     put(t.id, { x: BACKLOG_CENTER_X, y, z: z0 + col * pitch, rot: Math.PI / 2 + (hash01(t.id) - 0.5) * 0.12, scale: 0.92, wobble: 0, home: 'backlog' })
+  })
+
+  // ---- meeting table (any open task on the agenda, whoever owns it) ----
+  // Meeting order: most important first, then by number. Beyond the table's capacity boxes wait hidden at the centre.
+  const agenda = Object.values(tasks)
+    .filter(onTable)
+    .sort((a, b) => PRIORITY_META[b.priority].weight - PRIORITY_META[a.priority].weight || a.number - b.number)
+  agenda.forEach((t, k) => {
+    const shown = k < AGENDA_VISIBLE
+    agendaPos(shown ? k : 0, tmp3)
+    put(t.id, { x: tmp3.x, y: tmp3.y, z: tmp3.z, rot: (hash01(t.id) - 0.5) * 0.14, scale: shown ? 0.95 : 0, wobble: 0, home: 'agenda' })
   })
 
   // ---- done shelf ----

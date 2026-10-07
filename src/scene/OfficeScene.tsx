@@ -5,6 +5,7 @@ import { Decor } from './Furniture'
 import { Desks } from './Desks'
 import { DragLayer } from './DragLayer'
 import { Lighting } from './Lighting'
+import { MeetingRoomState } from './MeetingRoomState'
 import { Overlays } from './Overlays'
 import { Room } from './Room'
 import { TaskBoxes } from './TaskBoxes'
@@ -41,6 +42,7 @@ export function OfficeScene() {
         <Avatars />
         <TaskBoxes />
         <Overlays />
+        <MeetingRoomState />
       </group>
       <TaskTooltip />
       <DragLayer />

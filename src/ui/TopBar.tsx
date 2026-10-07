@@ -4,10 +4,10 @@ import { useShallow } from 'zustand/react/shallow'
 import { MAX_MEMBERS } from '../office/layout'
 import { WORKLOAD_LEVELS } from '../data/meta'
 import { computeKpis } from '../data/selectors'
-import { useOffice, type Overlay } from '../store'
+import { ongoingMeeting, useOffice, type Overlay } from '../store'
 import { AnimatedNumber } from './common'
-import { cssVars } from './format'
-import { useProjectList } from './hooks'
+import { cssVars, formatDuration } from './format'
+import { useNow, useProjectList } from './hooks'
 import { Icon } from './icons'
 import { useUi } from './uiState'
 import { ConnectionBanner, Toasts } from './Toasts'
@@ -24,7 +24,7 @@ const OVERLAYS: { id: Overlay; label: string; key: string }[] = [
 function revealTasks() {
   const ui = useUi.getState()
   ui.setPanelOpen(true)
-  if (ui.tab === 'team') ui.setTab('kanban')
+  if (ui.tab === 'team' || ui.tab === 'week') ui.setTab('kanban')
 }
 
 function Kpi({
@@ -182,6 +182,44 @@ function OverlaySwitch() {
   )
 }
 
+/** "회의" button with the agenda count; becomes a slim live pill while a meeting is ongoing. */
+function MeetingControl() {
+  const live = useOffice((s) => ongoingMeeting(s.meetings))
+  const agendaCount = useOffice((s) => {
+    let n = 0
+    for (const t of Object.values(s.tasks)) if (t.onAgenda === true && t.status !== 'done') n++
+    return n
+  })
+  const now = useNow(15_000)
+  if (live) {
+    const elapsed = formatDuration(live.startedAt, null, now)
+    const minutes = Math.max(0, Math.floor((now - Date.parse(live.startedAt)) / 60_000))
+    return (
+      <div className="meet-live" role="status" title={`${live.title} · 진행 중 ${elapsed} · 참석 ${live.attendeeIds.length}명 · 안건 ${live.agendaTaskIds.length}개`}>
+        <i className="meet-dot" aria-hidden="true" />
+        <b className="meet-elapsed">{minutes}분</b>
+        <span className="meet-meta">
+          {live.title} · 참석 {live.attendeeIds.length} · 안건 {live.agendaTaskIds.length}
+        </span>
+        <button type="button" className="btn btn-sm meet-end" onClick={() => useOffice.getState().openDialog({ kind: 'endMeeting', meetingId: live.id })} title="회의 종료 (M)" aria-label="회의 종료">
+          종료
+        </button>
+      </div>
+    )
+  }
+  return (
+    <button type="button" className="btn" onClick={() => useOffice.getState().openDialog({ kind: 'startMeeting' })} title="회의 시작 (M)">
+      <Icon name="meeting" size={14} />
+      회의
+      {agendaCount > 0 && (
+        <span className="badge" title={`안건 ${agendaCount}개`}>
+          {agendaCount}
+        </span>
+      )}
+    </button>
+  )
+}
+
 function MoreMenu({ onReset }: { onReset: () => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -226,6 +264,18 @@ function MoreMenu({ onReset }: { onReset: () => void }) {
             <Icon name="users" size={15} />
             팀원 추가
             {full && <span className="menu-note">가득 참</span>}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            onClick={() => {
+              setOpen(false)
+              useUi.getState().setHistoryOpen(true)
+            }}
+          >
+            <Icon name="history" size={15} />
+            회의록
           </button>
           {canReset && (
             <>
@@ -276,6 +326,7 @@ export function TopBar() {
             <span className="demo-text">데모</span>
           </label>
         )}
+        <MeetingControl />
         <button type="button" className="btn btn-primary" onClick={() => useOffice.getState().openDialog({ kind: 'task' })} title="새 작업 (N)">
           <Icon name="plus" size={14} />
           작업

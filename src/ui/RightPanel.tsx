@@ -6,12 +6,14 @@ import { Icon } from './icons'
 import { KanbanView } from './KanbanView'
 import { ListView } from './ListView'
 import { TeamView } from './TeamView'
+import { WeekView } from './WeekView'
 import { useUi, type Tab } from './uiState'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'kanban', label: '칸반' },
   { id: 'list', label: '목록' },
   { id: 'team', label: '팀원' },
+  { id: 'week', label: '주간' },
 ]
 
 function Panel() {
@@ -35,30 +37,33 @@ function Panel() {
               onClick={() => ui.setTab(t.id)}
             >
               {t.label}
-              <span className="tab-count">{t.id === 'team' ? memberCount : taskCount}</span>
+              {t.id !== 'week' && <span className="tab-count">{t.id === 'team' ? memberCount : taskCount}</span>}
             </button>
           ))}
         </div>
         <span className="grow" />
-        <button
-          type="button"
-          className={`btn btn-sm btn-ghost${wide ? ' is-on' : ''}`}
-          onClick={() => ui.setWide(!wide)}
-          aria-pressed={wide}
-          title={wide ? '좁게' : '넓게'}
-        >
-          <Icon name={wide ? 'shrink' : 'expand'} size={14} />
-          {wide ? '좁게' : '넓게'}
-        </button>
+        {tab !== 'week' && (
+          <button
+            type="button"
+            className={`btn btn-sm btn-ghost${wide ? ' is-on' : ''}`}
+            onClick={() => ui.setWide(!wide)}
+            aria-pressed={wide}
+            title={wide ? '좁게' : '넓게'}
+          >
+            <Icon name={wide ? 'shrink' : 'expand'} size={14} />
+            {wide ? '좁게' : '넓게'}
+          </button>
+        )}
         <button type="button" className="btn btn-icon btn-ghost" onClick={() => ui.setPanelOpen(false)} aria-label="패널 접기" title="패널 접기">
           <Icon name="chevronRight" size={16} />
         </button>
       </header>
-      {tab !== 'team' && <FilterBar />}
+      {(tab === 'kanban' || tab === 'list') && <FilterBar />}
       <div className={`panel-body panel-${tab}${tab === 'kanban' && wide ? ' is-wide-kanban' : ''}`}>
         {tab === 'kanban' && <KanbanView />}
         {tab === 'list' && <ListView />}
         {tab === 'team' && <TeamView />}
+        {tab === 'week' && <WeekView />}
       </div>
     </section>
   )

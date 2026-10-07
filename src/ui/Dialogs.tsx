@@ -9,6 +9,8 @@ import { Field } from './common'
 import { cssVars } from './format'
 import { useMemberList, useProjectList } from './hooks'
 import { Icon } from './icons'
+import { EndMeetingDialog, MeetingHistoryDialog, StartMeetingDialog } from './MeetingDialogs'
+import { useUi } from './uiState'
 
 const FOCUSABLE = 'input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
@@ -568,8 +570,13 @@ function ResetDialog() {
 
 export function Dialogs() {
   const dialog = useOffice((s) => s.dialog)
-  if (!dialog) return null
-  return <DialogSwitch key={dialogKey(dialog)} dialog={dialog} />
+  const historyOpen = useUi((s) => s.historyOpen)
+  return (
+    <>
+      {dialog && <DialogSwitch key={dialogKey(dialog)} dialog={dialog} />}
+      {historyOpen && !dialog && <MeetingHistoryDialog />}
+    </>
+  )
 }
 
 function dialogKey(d: Dialog): string {
@@ -588,5 +595,9 @@ function DialogSwitch({ dialog }: { dialog: Dialog }) {
       return <DeleteTaskDialog taskId={dialog.taskId} />
     case 'confirmReset':
       return <ResetDialog />
+    case 'startMeeting':
+      return <StartMeetingDialog />
+    case 'endMeeting':
+      return <EndMeetingDialog meetingId={dialog.meetingId} />
   }
 }
