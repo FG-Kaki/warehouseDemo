@@ -5,7 +5,7 @@ import { useEffect, useMemo } from 'react'
 import { ACESFilmicToneMapping, Color, Object3D, PCFShadowMap } from 'three'
 import { OFFICE } from '../office/layout'
 import { PALETTE } from '../theme'
-import { DYN_LAYER } from './runtime'
+import { DYN_LAYER, LOW_POWER } from './runtime'
 
 // A touch darker and cooler than the floor so the room reads against it.
 const BG = '#' + new Color(PALETTE.background).lerp(new Color('#6a7fa8'), 0.5).getHexString()
@@ -14,6 +14,7 @@ export function Lighting() {
   const gl = useThree((s) => s.gl)
   const camera = useThree((s) => s.camera)
   const raycaster = useThree((s) => s.raycaster)
+  const setDpr = useThree((s) => s.setDpr)
   const cx = OFFICE.width / 2
   const cz = OFFICE.depth / 2
   const target = useMemo(() => {
@@ -37,6 +38,11 @@ export function Lighting() {
     }
   }, [gl])
 
+  // Tablets: cap the pixel ratio (the Canvas allows up to 2).
+  useEffect(() => {
+    if (LOW_POWER) setDpr(Math.min(window.devicePixelRatio || 1, 1.5))
+  }, [setDpr])
+
   // Moving things live on DYN_LAYER: the camera, the sun's shadow camera and pointer picking must see it.
   useEffect(() => {
     camera.layers.enable(DYN_LAYER)
@@ -57,7 +63,7 @@ export function Lighting() {
         intensity={2.2}
         color={PALETTE.wall}
         castShadow
-        shadow-mapSize={[2048, 2048]}
+        shadow-mapSize={LOW_POWER ? [1024, 1024] : [2048, 2048]}
         shadow-camera-left={-20}
         shadow-camera-right={20}
         shadow-camera-top={20}

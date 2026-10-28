@@ -28,7 +28,8 @@ export default defineConfig({
     proxy: {
       // The local API server (server/, docs/API.md). 127.0.0.1 matches the server's bind address.
       '/api': {
-        target: 'http://127.0.0.1:8787',
+        // API_PORT lets the e2e suite run its own API next to a dev one.
+        target: `http://127.0.0.1:${process.env.API_PORT ?? 8787}`,
         changeOrigin: true,
         configure: (proxy) => {
           // Vite only ends a proxied response on upstream errors before headers are sent. For the

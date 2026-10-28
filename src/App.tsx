@@ -28,7 +28,9 @@ export default function App() {
 
   useEffect(() => {
     // A drag can start in the 3D view or the panel and end anywhere.
-    const up = () => {
+    const up = (e: PointerEvent) => {
+      // Only the pointer that carries the drag can drop it (a second finger or palm must not).
+      if (!e.isPrimary) return
       if (useOffice.getState().drag) useOffice.getState().endDrag()
     }
     const key = (e: KeyboardEvent) => {

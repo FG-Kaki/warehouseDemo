@@ -25,3 +25,7 @@ dist-ssr
 
 # local API server data
 server/data/
+
+# playwright
+test-results/
+playwright-report/

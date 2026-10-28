@@ -34,7 +34,8 @@ const MemberCard = memo(function MemberCard({ memberId, stat, level, reasons }: 
   const armed = useOffice((s) => s.drag !== null)
   if (!member || !stat) return null
 
-  const claim = () => {
+  const claim = (e: React.PointerEvent) => {
+    if (!e.isPrimary) return // a second finger must not move the drop target
     const st = useOffice.getState()
     if (!st.drag) return
     const cur = st.dropTarget
@@ -55,8 +56,8 @@ const MemberCard = memo(function MemberCard({ memberId, stat, level, reasons }: 
           select()
         }
       }}
-      onPointerEnter={() => {
-        claim()
+      onPointerEnter={(e) => {
+        claim(e)
         if (!useOffice.getState().drag) useOffice.getState().setHover({ kind: 'member', id: memberId })
       }}
       onPointerMove={claim}
@@ -77,6 +78,7 @@ const MemberCard = memo(function MemberCard({ memberId, stat, level, reasons }: 
           </span>
         </div>
         <WorkloadBar stat={stat} capacity={member.capacity} />
+        {reasons && <div className="mcard-reasons">{reasons}</div>}
         <div className="mcard-sub">
           열린 작업 {stat.count}개{isTarget && <span className="mcard-drop"> · 놓으면 배정돼요</span>}
         </div>
@@ -90,7 +92,8 @@ function BacklogDrop() {
   const count = useMemo(() => backlogTasks(tasks).length, [tasks])
   const isTarget = useOffice((s) => s.dropTarget?.kind === 'backlog')
   const armed = useOffice((s) => s.drag !== null)
-  const claim = () => {
+  const claim = (e: React.PointerEvent) => {
+    if (!e.isPrimary) return
     const st = useOffice.getState()
     if (st.drag && st.dropTarget?.kind !== 'backlog') st.setDropTarget({ kind: 'backlog' })
   }

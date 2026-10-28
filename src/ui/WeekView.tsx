@@ -89,7 +89,8 @@ const Cell = memo(function Cell({
   const own = col.dates ?? (date !== null ? [date] : [])
   const isTarget = useOffice((s) => s.dropTarget?.kind === 'day' && own.includes(s.dropTarget.date) && s.dropTarget.memberId === memberId)
   const armed = useOffice((s) => s.drag !== null)
-  const claim = () => {
+  const claim = (e: React.PointerEvent) => {
+    if (!e.isPrimary) return // a second finger must not move the drop target
     const st = useOffice.getState()
     if (!st.drag) return
     if (date === null) {
@@ -231,13 +232,12 @@ export function WeekView() {
     return { cells, points, late, noDue }
   }, [tasks, members, weekStart, offset])
 
-  const gridStyle = cssVars({ '--wk-cols': `100px ${offset === 0 ? '72px ' : ''}repeat(5, minmax(0, 1fr)) 72px` })
   const rangeText = `${formatMonthDay(weekStart)} – ${formatMonthDay(addDays(weekStart, 4))}`
   const anyChip = cells.size > 0
   const setOffset = (n: number) => useUi.getState().setWeekOffset(n)
 
   const renderRow = (rowId: string, member: Member | null) => (
-    <div className="wk-row" key={rowId} style={gridStyle}>
+    <div className="wk-row" key={rowId}>
       <RowLabel member={member} points={points[rowId] ?? 0} late={late[rowId] ?? 0} thisWeek={offset === 0} />
       {cols.map((c) => (
         <Cell key={c.id} col={c} memberId={member ? member.id : null} tasks={cells.get(`${rowId}|${c.id}`) ?? EMPTY} today={today} />
@@ -261,8 +261,8 @@ export function WeekView() {
       </div>
 
       <div className="wk-scroll">
-        <div className="wk-head" style={gridStyle}>
-          <span />
+        <div className="wk-head">
+          <span className="wk-corner" />
           {cols.map((c) => (
             <span key={c.id} className={`wk-h wk-h-${c.kind}${c.today ? ' is-today' : ''}`} title={c.kind === 'weekend' ? '토요일 마감으로 설정돼요' : undefined}>
               {c.label}

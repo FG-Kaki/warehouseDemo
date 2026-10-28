@@ -66,7 +66,8 @@ const Column = memo(function Column({ status, ids, wide, total }: { status: Task
   const isTarget = useOffice((s) => s.dropTarget?.kind === 'status' && s.dropTarget.status === status)
   const dragging = useOffice((s) => s.drag !== null)
 
-  const claim = () => {
+  const claim = (e: React.PointerEvent) => {
+    if (!e.isPrimary) return // a second finger must not move the drop target
     const st = useOffice.getState()
     if (!st.drag) return
     const cur = st.dropTarget

@@ -12,8 +12,9 @@
   backdrop-filter: blur(3px);
   animation: fade-in 0.18s ease both;
 }
-.modal { max-width: 100%; max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: var(--panel-solid); box-shadow: 0 24px 60px rgba(20, 30, 70, 0.35); animation: pop 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.1) both; }
-.modal form { display: flex; flex-direction: column; min-height: 0; }
+.modal { max-width: 100%; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: var(--panel-solid); box-shadow: 0 24px 60px rgba(20, 30, 70, 0.35); animation: pop 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.1) both; }
+.modal form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.modal-head, .modal-foot { flex: none; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 4px 24px; }
 .modal-head h2 { margin: 0; font-size: var(--fs-l); font-weight: 600; letter-spacing: -0.01em; }
 .modal-body { display: grid; gap: 12px; padding: 8px 24px 16px; overflow: auto; min-height: 0; }

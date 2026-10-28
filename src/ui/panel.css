@@ -18,7 +18,7 @@
 .panel-reopen:hover { background: #fff; color: var(--text); }
 .panel-head { display: flex; align-items: center; gap: 4px; padding: 8px; border-bottom: 1px solid var(--line); }
 .tabs { display: inline-flex; gap: 2px; }
-.tabs button { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); font-size: var(--fs-m); font-weight: 500; transition: background 0.15s, color 0.15s; }
+.tabs button { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); font-size: var(--fs-m); font-weight: 500; transition: background 0.15s, color 0.15s; }
 .tabs button:hover { color: var(--text); }
 .tabs button.is-on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tabs button > svg { display: none; }

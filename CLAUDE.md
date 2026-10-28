@@ -21,6 +21,7 @@ and makes the final call. It delegates:
 | `backend-engineer` | Sonnet | `server/` (Hono + node:sqlite API, SSE, demo bot) per `docs/API.md` |
 | `scene-builder` | Sonnet | `src/scene/` 3D office |
 | `ui-builder` | Sonnet | `src/ui/` panels, forms, HUD |
+| `qa-engineer` | Sonnet | `tests/e2e/` Playwright browser tests (installed Chrome, no browser downloads) |
 | `reviewer` | Opus | read-only adversarial review before a feature is accepted |
 
 Rules:
@@ -33,4 +34,6 @@ Rules:
 - `npm run dev` — dev server (http://localhost:5173); add `?source=api` to use the local API server
 - `npm run server` — local API server (http://localhost:8787, contract in `docs/API.md`)
 - `npx tsc -b` — typecheck
-- `npm run build` — production build
+- `npm run build` — production build (postbuild checks the 3D engine stays out of the first load)
+- `npm run test:contract` — DataSource contract suite (mock + API)
+- `npm run test:e2e` — browser tests (Playwright, installed Chrome)

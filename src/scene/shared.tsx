@@ -121,7 +121,10 @@ export function SceneHtml(props: ComponentProps<typeof Html>) {
     return () => cancelAnimationFrame(id)
   }, [connected])
   if (!connected || !ready) return null
-  return <Html {...props} />
+  // drei only honours `pointerEvents` in transform mode; without this the label div swallows clicks/drags aimed at the
+  // box or bot under it (a hovered box's own tooltip used to block pressing it).
+  const style = props.pointerEvents === 'none' ? { pointerEvents: 'none' as const, ...props.style } : props.style
+  return <Html {...props} style={style} />
 }
 
 /** Puts a dynamic subtree on the dynamic layer (re-applied on every render so late-mounted children are covered). */

@@ -2,6 +2,7 @@
 import { create } from 'zustand'
 import type { TaskStatus } from '../data/types'
 import { useOffice } from '../store'
+import { OVERLAY_QUERY } from './hooks'
 
 export type Tab = 'kanban' | 'list' | 'team' | 'week'
 export type SortKey = 'key' | 'title' | 'status' | 'priority' | 'assignee' | 'due' | 'estimate'
@@ -34,6 +35,9 @@ interface UiState {
   setWeekOffset: (n: number) => void
   /** Meeting history dialog (read-only, UI-only so it doesn't need a store Dialog kind). */
   historyOpen: boolean
+  /** Tap-to-explain text for chips that only have a hover tooltip. */
+  tip: string | null
+  showTip: (t: string | null) => void
   setHistoryOpen: (on: boolean) => void
   feedOpen: boolean
   setFeedOpen: (on: boolean) => void
@@ -63,7 +67,8 @@ export const useUi = create<UiState>((set, get) => ({
     else if (tab !== 'week' && cur === 'week') set({ tab, wide: get().prevWide ?? get().wide, prevWide: null })
     else set({ tab })
   },
-  panelOpen: true,
+  // Narrow screens start with the rail collapsed (it opens as an overlay drawer).
+  panelOpen: typeof window === 'undefined' || !window.matchMedia(OVERLAY_QUERY).matches,
   setPanelOpen: (panelOpen) => set({ panelOpen }),
   wide: false,
   setWide: (wide) => set({ wide }),
@@ -71,6 +76,8 @@ export const useUi = create<UiState>((set, get) => ({
   weekOffset: 0,
   setWeekOffset: (weekOffset) => set({ weekOffset }),
   historyOpen: false,
+  tip: null,
+  showTip: (tip) => set({ tip }),
   setHistoryOpen: (historyOpen) => set({ historyOpen }),
   feedOpen: false,
   setFeedOpen: (feedOpen) => set({ feedOpen }),

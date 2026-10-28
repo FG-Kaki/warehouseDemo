@@ -10,7 +10,7 @@ import { Overlays } from './Overlays'
 import { Room } from './Room'
 import { TaskBoxes } from './TaskBoxes'
 import { TaskTooltip } from './TaskTooltip'
-import { DRAG_THRESHOLD_PX } from './runtime'
+import { clickSlop } from './runtime'
 import { NoPick } from './shared'
 import { useOffice } from '../store'
 import { OFFICE } from '../office/layout'
@@ -23,7 +23,7 @@ export function OfficeScene() {
       {/* Anything that doesn't stop propagation lands here: a click on empty floor / furniture clears the selection. */}
       <group
         onClick={(e) => {
-          if (e.delta > DRAG_THRESHOLD_PX) return
+          if (e.delta > clickSlop(e)) return
           const s = useOffice.getState()
           if (s.drag) return
           if (s.selection) s.select(null)

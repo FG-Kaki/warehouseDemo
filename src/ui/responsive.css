@@ -1,0 +1,77 @@
+/* OWNER: ui-builder. Notebooks, tablets and touch: overlay drawer, tap tips, coarse-pointer sizing. */
+
+/* ---- tap tip (hover-only explanations reachable by tap) ---- */
+.tap-tip { position: relative; align-self: flex-start; margin-left: 4px; z-index: 5; max-width: min(320px, 100%); padding: 8px 12px; border-radius: 10px; background: var(--panel-solid); font-size: var(--fs-s); line-height: 1.45; animation: pop 0.14s ease both; }
+.kpi-tip { cursor: pointer; }
+.mcard-reasons { display: none; font-size: var(--fs-s); color: var(--text-dim); }
+
+/* pressing a card with a finger: a small lift before the long-press drag starts */
+.hud .is-pressing { transform: scale(1.03); box-shadow: 0 8px 20px rgba(30, 45, 90, 0.2); transition-delay: 0.1s; }
+/* no text selection / callout bubble on a long-press (iOS) */
+.card, .wk-chip, .mcard { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* ---- overlay drawer (<= 1100px): the rail floats over the scene and reserves no space ---- */
+@media (max-width: 1100px) {
+  .hud { --reserve: 132px; }
+  .hud.rail-normal { --rail-w: min(380px, calc(100vw - 24px)); }
+  .hud.rail-wide { --rail-w: min(720px, calc(100vw - 24px)); }
+  .hud.rail-min { --rail-w: 132px; }
+  .hud .rail { z-index: 15; }
+  .hud .rail > .panel,
+  .hud .rail > .detail { box-shadow: 0 18px 48px rgba(30, 45, 90, 0.22), 0 2px 6px rgba(30, 45, 90, 0.1); }
+  /* An open drawer starts below the top bar (var(--top-h), measured), so 회의 / + 작업 / ⋯ stay reachable. */
+  .hud.rail-normal .rail, .hud.rail-wide .rail { top: var(--top-h, 76px); transition: width 0.25s ease, top 0.2s ease; }
+  /* The bottom-left stack (toasts + feed) sits under an open drawer and never wider than the space left of it. */
+  .hud.rail-normal .hud-bottom, .hud.rail-wide .hud-bottom { z-index: 10; max-width: calc(100% - var(--rail-w) - 36px); overflow: hidden; }
+  .tabs button { white-space: nowrap; }
+  .tab-count, .btn-label { display: none; }
+}
+
+/* the activity feed (expanded) and the suggestion stack share the left column: keep them apart on short screens */
+@media (max-height: 800px) {
+  .suggest { max-height: 30vh; }
+  .feed { max-height: min(260px, 30vh); }
+}
+
+/* ---- touch ---- */
+@media (pointer: coarse) {
+  .hud .btn { min-height: 40px; height: 40px; padding: 0 14px; }
+  .hud .btn-sm { height: 40px; padding: 0 12px; }
+  .hud .btn-icon, .hud .btn-xs { width: 40px; padding: 0; flex: none; }
+  .hud .select, .modal .select { height: 40px; }
+  .hud textarea.select { height: auto; }
+  .hud .select-sm, .modal .outcome-ctl .select-sm { height: 40px; }
+  .tabs button { height: 40px; padding: 0 10px; white-space: nowrap; }
+  .seg button { height: 40px; padding: 0 14px; }
+  .search input { height: 40px; }
+  .kpi { min-height: 44px; }
+  .balance { min-width: 40px; justify-content: center; }
+  .fchip { position: relative; height: 36px; padding: 0 14px; }
+  .fchip::after { content: ''; position: absolute; inset: -4px 0; }
+  .fchip-lg { height: 40px; }
+  .swatch { width: 36px; height: 36px; }
+  .menu-item { min-height: 44px; padding: 10px; }
+  .col-head { min-height: 40px; }
+  .lrow { min-height: 52px; }
+  .lhead { height: 41px; }
+  .card { padding: 12px 14px; }
+  .mcard { padding: 14px; }
+  .mcard-reasons { display: block; }
+  .wk-chip { padding: 6px 7px; }
+  .wk-chip-title { font-size: 12px; }
+  .wk-cell { min-height: 68px; }
+  .wk-label.is-member { min-height: 44px; }
+  .wk-bar .btn { min-height: 40px; }
+  .feed-btn { min-height: 40px; }
+  .feed-pill { height: 44px; }
+  .panel-reopen { height: 44px; }
+  .sug-link { min-height: 40px; padding: 0 12px; }
+  .sug-pill-main { min-height: 40px; }
+  .toast-x { width: 36px; height: 36px; }
+  .link-btn { min-height: 40px; padding: 0 10px; }
+  .meet-end { height: 36px; }
+  .agenda-list li { min-height: 48px; }
+  .detail-foot .btn { padding: 0 12px; }
+  .radio { padding: 14px; }
+  .inline { padding: 8px; }
+}

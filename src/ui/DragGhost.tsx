@@ -7,13 +7,15 @@ import { formatDate } from './format'
 import { Icon } from './icons'
 
 /** Last known pointer position, kept outside React so the ghost can start in the right place. */
-const pointer = { x: -999, y: -999 }
+const pointer = { x: -999, y: -999, touch: false }
 
 export function useTrackPointer() {
   useEffect(() => {
     const move = (e: PointerEvent) => {
+      if (!e.isPrimary) return
       pointer.x = e.clientX
       pointer.y = e.clientY
+      pointer.touch = e.pointerType === 'touch'
     }
     window.addEventListener('pointermove', move, { passive: true })
     window.addEventListener('pointerdown', move, { passive: true })
@@ -62,11 +64,20 @@ function Ghost({ taskId }: { taskId: string }) {
   })
 
   useEffect(() => {
+    // Under a finger the card would be hidden: sit above and beside it instead.
     const place = (x: number, y: number) => {
-      if (el.current) el.current.style.transform = `translate3d(${x + 16}px, ${y + 14}px, 0)`
+      if (!el.current) return
+      const w = el.current.offsetWidth || 250
+      const tx = pointer.touch ? Math.min(Math.max(8, x - w / 2), window.innerWidth - w - 8) : x + 16
+      const ty = pointer.touch ? Math.max(8, y - 96) : y + 14
+      el.current.style.transform = `translate3d(${tx}px, ${ty}px, 0)`
     }
     place(pointer.x, pointer.y)
-    const move = (e: PointerEvent) => place(e.clientX, e.clientY)
+    const move = (e: PointerEvent) => {
+      if (!e.isPrimary) return
+      pointer.touch = e.pointerType === 'touch'
+      place(e.clientX, e.clientY)
+    }
     window.addEventListener('pointermove', move, { passive: true })
     return () => window.removeEventListener('pointermove', move)
   }, [])

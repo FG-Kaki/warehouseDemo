@@ -51,7 +51,7 @@ function Panel() {
             title={wide ? '좁게' : '넓게'}
           >
             <Icon name={wide ? 'shrink' : 'expand'} size={14} />
-            {wide ? '좁게' : '넓게'}
+            <span className="btn-label">{wide ? '좁게' : '넓게'}</span>
           </button>
         )}
         <button type="button" className="btn btn-icon btn-ghost" onClick={() => ui.setPanelOpen(false)} aria-label="패널 접기" title="패널 접기">

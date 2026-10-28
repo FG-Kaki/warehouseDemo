@@ -11,7 +11,7 @@ import { useOffice } from '../store'
 import { PALETTE } from '../theme'
 import { DESK_TOP_Y } from './Desks'
 import { resetDropTracking, updateDropTarget } from './dropTarget'
-import { boxLive, cameraLock, DRAG_THRESHOLD_PX, dragPoint, noRaycast, setCursor, type BoxLive } from './runtime'
+import { boxLive, cameraGesture, cameraLock, clickSlop, DRAG_THRESHOLD_PX, dragPoint, LONG_PRESS_MS, LONG_PRESS_SLOP_PX, releaseCanvasPointer, noRaycast, setCursor, type BoxLive } from './runtime'
 import { clamp, UNIT_BOX, useDynamicLayer } from './shared'
 import { BOX_D, BOX_W, boxHeight, type Slot } from './slots'
 
@@ -308,20 +308,62 @@ export const TaskBox = memo(function TaskBox({ id, slot, dimmed, overlay, pop, t
         if (task.status === 'done') return
         const sx = e.nativeEvent.clientX
         const sy = e.nativeEvent.clientY
+        const pid = e.nativeEvent.pointerId
+        const startDragNow = (cx: number, cy: number) => {
+          releaseCanvasPointer(pid)
+          useOffice.getState().startDrag(id, 'scene')
+          // Hit-test right away so a quick flick-and-release still has a drop target.
+          resetDropTracking()
+          updateDropTarget(cx, cy)
+          setCursor('grabbing')
+        }
+        if (e.nativeEvent.pointerType === 'touch') {
+          // Touch: a finger on a box still orbits the camera; only a ~300 ms steady press picks the box up.
+          let px = sx
+          let py = sy
+          const pointerId = pid
+          cameraGesture.begin()
+          const stop = () => {
+            window.clearTimeout(timer)
+            window.removeEventListener('pointermove', tmove)
+            window.removeEventListener('pointerup', stop)
+            window.removeEventListener('pointercancel', stop)
+            window.removeEventListener('pointerdown', other)
+          }
+          const tmove = (ev: PointerEvent) => {
+            if (ev.pointerId !== pointerId) return
+            px = ev.clientX
+            py = ev.clientY
+            if (Math.hypot(px - sx, py - sy) > LONG_PRESS_SLOP_PX) stop() // it is an orbit gesture
+          }
+          const other = (ev: PointerEvent) => {
+            if (ev.pointerId !== pointerId) stop() // a second finger: pinch, not pick-up
+          }
+          const timer = window.setTimeout(() => {
+            stop()
+            if (useOffice.getState().drag) return
+            if (cameraLock.controls) cameraLock.controls.enabled = false
+            cameraGesture.discard() // the box was held: undo any tiny orbit that happened during the press
+            navigator.vibrate?.(12)
+            startDragNow(px, py)
+          }, LONG_PRESS_MS)
+          window.addEventListener('pointermove', tmove)
+          window.addEventListener('pointerup', stop)
+          window.addEventListener('pointercancel', stop)
+          window.addEventListener('pointerdown', other)
+          return
+        }
         const lock = cameraLock.controls
         if (lock) lock.enabled = false
         const cleanup = () => {
           window.removeEventListener('pointermove', move)
           window.removeEventListener('pointerup', up)
+          window.removeEventListener('pointercancel', up)
         }
         const move = (ev: PointerEvent) => {
           if (Math.hypot(ev.clientX - sx, ev.clientY - sy) <= DRAG_THRESHOLD_PX) return
           cleanup()
-          useOffice.getState().startDrag(id, 'scene')
-          // Hit-test right away so a quick flick-and-release still has a drop target.
-          resetDropTracking()
-          updateDropTarget(ev.clientX, ev.clientY)
-          setCursor('grabbing')
+          startDragNow(ev.clientX, ev.clientY)
         }
         const up = () => {
           cleanup()
@@ -329,10 +371,11 @@ export const TaskBox = memo(function TaskBox({ id, slot, dimmed, overlay, pop, t
         }
         window.addEventListener('pointermove', move)
         window.addEventListener('pointerup', up)
+        window.addEventListener('pointercancel', up)
       }}
       onClick={(e) => {
         e.stopPropagation()
-        if (e.delta > DRAG_THRESHOLD_PX) return
+        if (e.delta > clickSlop(e)) return
         useOffice.getState().select({ kind: 'task', id })
       }}
     >

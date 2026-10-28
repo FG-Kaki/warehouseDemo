@@ -53,6 +53,7 @@ Need a change? Stop and describe exactly what and why in your report instead of 
 | Mock data + demo mode | data-engineer | `src/data/mock/**` (entry: `createMockDataSource()` in `index.ts`) |
 | API client + contract tests | data-engineer | `src/data/api/**` (entry: `createApiDataSource()`), `tests/contract/**` |
 | Local API server + demo bot | backend-engineer | `server/**` (contract: `docs/API.md`) |
+| Browser e2e tests | qa-engineer | `tests/e2e/**`, `playwright.config.ts` |
 | 3D office | scene-builder | `src/scene/**` (entry: `OfficeScene`) |
 | Panels, forms, HUD | ui-builder | `src/ui/**` (entry: `Hud`, styles in `src/ui/*.css`) |
 
@@ -109,7 +110,10 @@ Strict project settings: `verbatimModuleSyntax` (use `import type`), `erasableSy
 ## Processes and the user's machine
 
 This runs on the user's own computer. Only stop processes **you started in this task**, by their
-PID. Never kill by name or wildcard (`Stop-Process -Name chrome`, `taskkill /IM node.exe`,
+PID — the PID you captured when you launched it, never one looked up by port
+(`Get-NetTCPConnection -LocalPort … | Stop-Process` kills whatever holds the port, e.g. the user's
+dev server, if yours had fallen back to another port). Run your own servers on non-default ports
+with `--strictPort` so a clash fails loudly instead of silently moving. Never kill by name or wildcard (`Stop-Process -Name chrome`, `taskkill /IM node.exe`,
 `pkill node`, …) — that closes the user's own browser windows and other apps. Leave dev servers you
 didn't start running. For browser checks prefer the in-app browser tools; if you launch a headless
 browser yourself, use a dedicated `--user-data-dir` under your scratch/temp dir and close only that

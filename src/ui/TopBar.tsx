@@ -10,7 +10,7 @@ import { cssVars, formatDuration } from './format'
 import { useNow, useProjectList } from './hooks'
 import { Icon } from './icons'
 import { useUi } from './uiState'
-import { ConnectionBanner, Toasts } from './Toasts'
+import { ConnectionBanner } from './Toasts'
 import { Suggestions } from './Suggestions'
 
 const OVERLAYS: { id: Overlay; label: string; key: string }[] = [
@@ -33,6 +33,7 @@ function Kpi({
   active,
   onClick,
   title,
+  hint,
   children,
 }: {
   label: string
@@ -40,6 +41,8 @@ function Kpi({
   active?: boolean
   onClick?: () => void
   title?: string
+  /** Explanation shown on tap (touch has no hover tooltips). */
+  hint?: string
   children: ReactNode
 }) {
   const cls = `kpi${bad ? ' kpi-bad' : ''}${active ? ' is-active' : ''}`
@@ -51,6 +54,10 @@ function Kpi({
   )
   return onClick ? (
     <button type="button" className={`${cls} kpi-click`} onClick={onClick} title={title} aria-pressed={active}>
+      {body}
+    </button>
+  ) : hint ? (
+    <button type="button" className={`${cls} kpi-click kpi-tip`} onClick={() => useUi.getState().showTip(hint)} title={hint}>
       {body}
     </button>
   ) : (
@@ -79,10 +86,11 @@ function KpiRow() {
   const busiest = kpis.busiestId ? members[kpis.busiestId] : undefined
   const memberCount = Object.keys(members).length
   const imb = imbalanceLabel(kpis.imbalance)
+  const balanceHint = `업무 편중도: ${imb.text}${busiest && imb.tone !== 'good' ? ` · 가장 바쁜 팀원 ${busiest.name} 님` : ''}`
 
   return (
     <div className="kpis">
-      <Kpi label="진행 중">
+      <Kpi label="진행 중" hint="진행 중 상태인 작업 수예요">
         <AnimatedNumber value={kpis.inProgress} />
       </Kpi>
       <Kpi
@@ -108,17 +116,19 @@ function KpiRow() {
       >
         <AnimatedNumber value={kpis.unassigned} />
       </Kpi>
-      <Kpi label="이번 주 완료">
+      <Kpi label="이번 주 완료" hint="이번 주(월요일부터)에 완료된 작업 수예요">
         <AnimatedNumber value={kpis.doneThisWeek} />
       </Kpi>
       {memberCount > 0 && (
-        <span
+        <button
+          type="button"
           className={`balance balance-${imb.tone}`}
-          title={`업무 편중도: ${imb.text}${busiest && imb.tone !== 'good' ? ` · 가장 바쁜 팀원 ${busiest.name} 님` : ''}`}
+          title={balanceHint}
+          onClick={() => useUi.getState().showTip(balanceHint)}
         >
           <i className="dot" />
-          {imb.text}
-        </span>
+          <span className="balance-word">{imb.text}</span>
+        </button>
       )}
     </div>
   )
@@ -224,6 +234,7 @@ function MoreMenu({ onReset }: { onReset: () => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const canReset = useOffice((s) => s.canReset)
+  const { canDemo, demoMode } = useOffice(useShallow((s) => ({ canDemo: s.canDemo, demoMode: s.demoMode })))
   const full = useOffice((s) => Object.keys(s.members).length >= MAX_MEMBERS)
   useEffect(() => {
     if (!open) return
@@ -265,6 +276,19 @@ function MoreMenu({ onReset }: { onReset: () => void }) {
             팀원 추가
             {full && <span className="menu-note">가득 참</span>}
           </button>
+          {canDemo && (
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={demoMode}
+              className="menu-item menu-narrow"
+              onClick={() => useOffice.getState().setDemoMode(!demoMode)}
+            >
+              <Icon name="pulse" size={15} />
+              데모 모드
+              <span className="menu-note">{demoMode ? '켜짐' : '꺼짐'}</span>
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"
@@ -300,6 +324,29 @@ function MoreMenu({ onReset }: { onReset: () => void }) {
   )
 }
 
+/** Small popover for hover-only explanations, reachable by tap. Hides on the next tap or after a few seconds. */
+function TapTip() {
+  const tip = useUi((s) => s.tip)
+  useEffect(() => {
+    if (!tip) return
+    const timer = window.setTimeout(() => useUi.getState().showTip(null), 4000)
+    const down = (e: PointerEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest('.kpi-tip, .balance')) useUi.getState().showTip(null)
+    }
+    window.addEventListener('pointerdown', down)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('pointerdown', down)
+    }
+  }, [tip])
+  if (!tip) return null
+  return (
+    <div className="tap-tip glass" role="status">
+      {tip}
+    </div>
+  )
+}
+
 export function TopBar() {
   const { sourceLabel, canDemo, demoMode } = useOffice(
     useShallow((s) => ({ sourceLabel: s.sourceLabel, canDemo: s.canDemo, demoMode: s.demoMode })),
@@ -318,7 +365,6 @@ export function TopBar() {
           {connection !== null && <span className="badge-server">서버</span>}
         </div>
         <KpiRow />
-        <span className="grow" />
         {canDemo && (
           <label className="demo" title="데모 모드 · 팀원 자동 활동">
             <input type="checkbox" role="switch" checked={demoMode} onChange={(e) => useOffice.getState().setDemoMode(e.target.checked)} />
@@ -341,7 +387,7 @@ export function TopBar() {
         </div>
       )}
       <ConnectionBanner />
-      <Toasts />
+      <TapTip />
       </div>
       <Suggestions />
     </div>

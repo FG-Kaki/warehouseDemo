@@ -1,5 +1,5 @@
 // Shared hooks for the HUD. OWNER: ui-builder.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { Id, Member, Task } from '../data/types'
 import { PRIORITY_META } from '../data/meta'
 import { isOpen, matchesFilters, todayIso, workload, workloadLevel, tasksOf, openPoints } from '../data/selectors'
@@ -56,8 +56,49 @@ export function useMemberStats(): Record<Id, MemberStat> {
   }, [tasks, members])
 }
 
+/** Below this width the management rail is an overlay drawer instead of a docked column. */
+export const OVERLAY_QUERY = '(max-width: 1100px)'
+
+/** Live `matchMedia(query).matches`. */
+export function useMediaQuery(query: string): boolean {
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      const mq = window.matchMedia(query)
+      mq.addEventListener('change', cb)
+      return () => mq.removeEventListener('change', cb)
+    },
+    [query],
+  )
+  return useSyncExternalStore(
+    subscribe,
+    () => window.matchMedia(query).matches,
+    () => false,
+  )
+}
+
 /**
- * Pointer-down + move > 4px on a card starts a panel drag (store.startDrag).
+ * One permanent non-passive touchmove listener: WebKit decides scroll-blocking at touchstart, so it has
+ * to exist before the finger lands. It only cancels the scroll while a drag is active.
+ */
+export function useTouchDragGuard() {
+  useEffect(() => {
+    const block = (ev: TouchEvent) => {
+      if (ev.cancelable && useOffice.getState().drag) ev.preventDefault()
+    }
+    window.addEventListener('touchmove', block, { passive: false })
+    return () => window.removeEventListener('touchmove', block)
+  }, [])
+}
+
+const LONG_PRESS_MS = 300
+const TOUCH_SLOP = 8
+
+/**
+ * Starts a panel drag (store.startDrag) from a card.
+ * - Mouse / pen: pointer-down + move > 4px.
+ * - Touch: only after a ~300 ms press without moving (a quick swipe scrolls the list). The card gets
+ *   `is-pressing` meanwhile for a small lift, and releases pointer capture once the drag starts so the
+ *   elements / 3D view under the finger see the moves.
  * `consumeClick()` returns true (once) if the gesture was a drag, so onClick can skip selecting.
  */
 export function useTaskDrag(taskId: Id) {
@@ -68,21 +109,64 @@ export function useTaskDrag(taskId: Id) {
       moved.current = false
       const sx = e.clientX
       const sy = e.clientY
-      const move = (ev: PointerEvent) => {
-        if (moved.current) return
-        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 4) {
-          moved.current = true
-          useOffice.getState().startDrag(taskId, 'panel')
+      const id = e.pointerId
+      const el = e.currentTarget as HTMLElement
+      // Touch pointers are implicitly captured by the element actually hit (often a child of the card).
+      const hit = e.target as Element
+      const touch = e.pointerType === 'touch'
+      let timer = 0
+      let started = false
+
+      const noMenu = (ev: Event) => ev.preventDefault()
+      const begin = () => {
+        if (started) return
+        started = true
+        moved.current = true
+        el.classList.remove('is-pressing')
+        useOffice.getState().startDrag(taskId, 'panel')
+        if (touch) {
+          try {
+            if (hit.hasPointerCapture?.(id)) hit.releasePointerCapture(id)
+            if (el.hasPointerCapture(id)) el.releasePointerCapture(id)
+          } catch {
+            /* capture already gone */
+          }
+          // (useTouchDragGuard keeps the finger from scrolling the list while the drag is active.)
         }
       }
-      const up = () => {
+      const move = (ev: PointerEvent) => {
+        if (ev.pointerId !== id || started) return
+        const d = Math.hypot(ev.clientX - sx, ev.clientY - sy)
+        if (touch) {
+          if (d > TOUCH_SLOP) stop() // it's a scroll / swipe
+        } else if (d > 4) begin()
+      }
+      const stop = () => {
+        window.clearTimeout(timer)
+        el.classList.remove('is-pressing')
         window.removeEventListener('pointermove', move)
         window.removeEventListener('pointerup', up)
-        window.removeEventListener('pointercancel', up)
+        window.removeEventListener('pointercancel', cancel)
+        // Keep swallowing the long-press context menu until the finger lifts.
+        window.setTimeout(() => window.removeEventListener('contextmenu', noMenu, true), 400)
+      }
+      const up = (ev: PointerEvent) => {
+        if (ev.pointerId === id) stop()
+      }
+      const cancel = (ev: PointerEvent) => {
+        if (ev.pointerId !== id) return
+        // The browser took the gesture over (e.g. started scrolling): abandon a drag in progress.
+        if (started && useOffice.getState().drag?.taskId === taskId) useOffice.getState().cancelDrag()
+        stop()
       }
       window.addEventListener('pointermove', move)
       window.addEventListener('pointerup', up)
-      window.addEventListener('pointercancel', up)
+      window.addEventListener('pointercancel', cancel)
+      if (touch) {
+        window.addEventListener('contextmenu', noMenu, true)
+        el.classList.add('is-pressing')
+        timer = window.setTimeout(begin, LONG_PRESS_MS)
+      }
     },
     [taskId],
   )

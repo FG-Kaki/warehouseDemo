@@ -38,26 +38,42 @@ export function DragLayer() {
       resetDropTracking()
     }
     const el = gl.domElement
-    const move = (e: PointerEvent) => updateDropTarget(e.clientX, e.clientY)
-    const leave = () => {
-      clearSceneTarget()
-      if (ghost.current) ghost.current.visible = false
+    // Window-level on purpose: a drag started in the panel (or by touch) keeps delivering pointer events to the
+    // element that received the pointerdown, never to the canvas, so the canvas can't be the one listening.
+    let over = drag.from === 'scene'
+    // Only the primary pointer steers the drop target: a second finger or a palm must not redirect it.
+    const track = (e: PointerEvent) => {
+      if (!e.isPrimary) return
+      if (isOverCanvas(e.clientX, e.clientY)) {
+        over = true
+        updateDropTarget(e.clientX, e.clientY)
+      } else if (over) {
+        over = false
+        clearSceneTarget()
+        if (ghost.current) ghost.current.visible = false
+      }
     }
-    // Capture phase on window: runs before App's pointerup handler applies the drop.
+    // Capture phase: runs before App's pointerup handler applies the drop.
     const up = (e: PointerEvent) => {
+      if (!e.isPrimary) return
       if (isOverCanvas(e.clientX, e.clientY)) updateDropTarget(e.clientX, e.clientY)
     }
-    el.addEventListener('pointermove', move)
-    el.addEventListener('pointerdown', move)
-    el.addEventListener('pointerenter', move)
-    el.addEventListener('pointerleave', leave)
+    // The browser took over the gesture (touch scroll, system gesture): give up instead of leaving a stuck drag.
+    const cancel = (e: PointerEvent) => {
+      if (e.isPrimary) useOffice.getState().cancelDrag()
+    }
+    const noMenu = (e: Event) => e.preventDefault()
+    window.addEventListener('pointermove', track)
+    window.addEventListener('pointerdown', track)
     window.addEventListener('pointerup', up, true)
+    window.addEventListener('pointercancel', cancel)
+    el.addEventListener('contextmenu', noMenu)
     return () => {
-      el.removeEventListener('pointermove', move)
-      el.removeEventListener('pointerdown', move)
-      el.removeEventListener('pointerenter', move)
-      el.removeEventListener('pointerleave', leave)
+      window.removeEventListener('pointermove', track)
+      window.removeEventListener('pointerdown', track)
       window.removeEventListener('pointerup', up, true)
+      window.removeEventListener('pointercancel', cancel)
+      el.removeEventListener('contextmenu', noMenu)
       dragPoint.active = false
     }
   }, [drag, gl])

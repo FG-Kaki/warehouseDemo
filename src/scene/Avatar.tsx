@@ -21,7 +21,7 @@ import {
   meetingSeat,
   type Spot,
 } from './paths'
-import { avatarLive, DRAG_THRESHOLD_PX, setCursor, type AvatarLive } from './runtime'
+import { avatarLive, clickSlop, setCursor, type AvatarLive } from './runtime'
 
 const SPEED = 1.4
 const CUBE = 0.55
@@ -335,7 +335,7 @@ export const Avatar = memo(function Avatar({ member, spawn, leaving, onGone }: A
       onClick={(e) => {
         if (!live.current.visible) return
         e.stopPropagation()
-        if (e.delta > DRAG_THRESHOLD_PX) return
+        if (e.delta > clickSlop(e)) return
         useOffice.getState().select({ kind: 'member', id })
       }}
     >

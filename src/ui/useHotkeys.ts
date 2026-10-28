@@ -2,6 +2,7 @@
 //   N new task · M start/end meeting · / search · 1-4 overlays · Esc close dialog, else clear selection
 import { useEffect } from 'react'
 import { ongoingMeeting, useOffice, type Overlay } from '../store'
+import { OVERLAY_QUERY } from './hooks'
 import { useUi } from './uiState'
 
 const OVERLAY_BY_CODE: Record<string, Overlay> = { Digit1: 'none', Digit2: 'workload', Digit3: 'deadline', Digit4: 'project' }
@@ -21,7 +22,9 @@ export function useHotkeys() {
 
       if (e.key === 'Escape') {
         if (st.drag) return // App cancels the drag
+        const ui = useUi.getState()
         if (st.dialog) st.openDialog(null)
+        else if (ui.panelOpen && window.matchMedia(OVERLAY_QUERY).matches) ui.setPanelOpen(false)
         else if (st.selection) st.select(null)
         return
       }
